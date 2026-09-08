@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "roost"
+version = "0.1.0"
+description = "An agent harness for every common AI endpoint: PC control, duplex voice, and per-modality provider choice."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.9",
+  "aiohttp>=3.10",
+  "websockets>=13.0",
+  # Memory only. Brute-force cosine over a few thousand quantised vectors,
+  # which is a dot product, not a vector database.
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6"]
+
+[project.scripts]
+roost = "roost.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["roost"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "ASYNC"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "single"

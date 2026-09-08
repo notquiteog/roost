@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roost</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<aside id="sidebar">
+  <header>
+    <h1>Roost</h1>
+    <button id="new-session" title="New session">+</button>
+  </header>
+  <ul id="sessions" aria-label="Sessions"></ul>
+  <button id="open-memory" class="ghost" hidden>Memory</button>
+  <footer id="providers" aria-label="Providers"></footer>
+</aside>
+
+<main>
+  <header id="bar">
+    <div id="session-title">No session</div>
+    <div id="session-meta"></div>
+    <div class="spacer"></div>
+    <label id="mode-wrap" hidden>
+      <span>Approval</span>
+      <select id="mode">
+        <option value="read_only">read only</option>
+        <option value="ask">ask</option>
+        <option value="auto_edit">auto edit</option>
+        <option value="trusted">trusted</option>
+        <option value="unrestricted">unrestricted</option>
+      </select>
+    </label>
+    <button id="voice-toggle" class="ghost" disabled>Start voice</button>
+    <span id="link" class="pill off">offline</span>
+  </header>
+
+  <div id="transcript" role="log" aria-live="polite"></div>
+
+  <!-- Zero height, so the companion floats over the bottom of the transcript
+       rather than taking a strip of it. -->
+  <div id="perch-rail"><div id="perch"></div></div>
+
+  <div id="voice-strip" hidden>
+    <span class="dot" id="voice-dot"></span>
+    <span id="voice-state">listening</span>
+    <span id="voice-partial"></span>
+    <div class="spacer"></div>
+    <button id="voice-interrupt" class="ghost small">Interrupt</button>
+    <button id="voice-mute" class="ghost small">Mute</button>
+  </div>
+
+  <form id="composer">
+    <textarea id="input" rows="1" placeholder="Ask it to do something…  (Enter to send, Shift+Enter for a newline)" disabled></textarea>
+    <button id="send" type="submit" disabled>Send</button>
+    <button id="stop" type="button" class="danger" hidden>Stop</button>
+  </form>
+</main>
+
+<dialog id="new-dialog">
+  <form method="dialog">
+    <h2>New session</h2>
+    <label>Working root<input name="root" placeholder="leave blank for the server default"></label>
+    <label>Model<input name="model" placeholder="leave blank to use the first available"></label>
+    <label>Provider
+      <select name="provider"><option value="">first that can do chat</option></select>
+    </label>
+    <label>Approval
+      <select name="mode">
+        <option value="read_only">read only — nothing that changes anything</option>
+        <option value="ask" selected>ask — reads run, everything else is confirmed</option>
+        <option value="auto_edit">auto edit — reads and file writes run</option>
+        <option value="trusted">trusted — commands run too</option>
+        <option value="unrestricted">unrestricted — nothing is asked</option>
+      </select>
+    </label>
+    <menu>
+      <button value="cancel" class="ghost">Cancel</button>
+      <button value="create" id="create-session">Create</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="memory-dialog">
+  <h2>Memory</h2>
+  <p class="explain">
+    What Roost remembers about you between conversations. It is off until you turn
+    it on, everything stored is listed here, and you can remove any of it or all of it.
+  </p>
+
+  <label class="switch">
+    <input type="checkbox" id="mem-enabled">
+    <span>Remember things between conversations</span>
+  </label>
+  <label class="switch">
+    <input type="checkbox" id="mem-auto">
+    <span>Also pick things up automatically from what I say
+      <em>— otherwise only what you explicitly ask to be remembered is stored</em></span>
+  </label>
+
+  <div id="mem-count" class="explain"></div>
+  <ul id="mem-list"></ul>
+
+  <menu>
+    <button id="mem-wipe" class="danger">Forget everything</button>
+    <div class="spacer"></div>
+    <button id="mem-close" class="ghost">Close</button>
+  </menu>
+</dialog>
+
+<script src="/static/app.js" type="module"></script>
+</body>
+</html>
