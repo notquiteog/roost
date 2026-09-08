@@ -220,13 +220,20 @@ class AgentError(_Event):
     retryable: bool = False
 
 
+class PolicyChanged(_Event):
+    type: Literal['policy.changed'] = 'policy.changed'
+    mode: str
+    # The same thing spelled out, which is what the session banner shows.
+    policy: str = ''
+
+
 class SessionEnded(_Event):
     type: Literal['session.ended'] = 'session.ended'
     reason: str = 'closed'
 
 
 AgentEvent = Annotated[
-    SessionStarted | TurnStarted | TextDelta | ThinkingDelta | ToolProposed | ToolStarted | ToolOutputDelta | ToolCompleted | ToolDenied | QuestionAsked | TurnCompleted | AgentError | SessionEnded,
+    SessionStarted | TurnStarted | TextDelta | ThinkingDelta | ToolProposed | ToolStarted | ToolOutputDelta | ToolCompleted | ToolDenied | QuestionAsked | TurnCompleted | PolicyChanged | AgentError | SessionEnded,
     Field(discriminator='type'),
 ]
 
@@ -272,11 +279,24 @@ class Interrupt(BaseModel):
     type: Literal['turn.interrupt'] = 'turn.interrupt'
 
 
+class SetPolicy(BaseModel):
+    """Change what the agent may do without asking, mid-session.
+
+    How much you trust a run is something you learn *during* it, so this is a
+    control rather than a property of the session's birth. It applies from the
+    next decision onwards; a call already waiting on you was graded under the
+    old mode and stays that way.
+    """
+
+    type: Literal['policy.set'] = 'policy.set'
+    mode: str
+
+
 class CloseSession(BaseModel):
     type: Literal['session.close'] = 'session.close'
 
 
 ClientCommand = Annotated[
-    SubmitTurn | ApproveTool | DenyTool | AnswerQuestion | Interrupt | CloseSession,
+    SubmitTurn | ApproveTool | DenyTool | AnswerQuestion | Interrupt | SetPolicy | CloseSession,
     Field(discriminator='type'),
 ]

@@ -107,3 +107,29 @@ def test_free_trials_are_purchases(label):
     tighter pattern than this."""
     risk, _ = classify_click(el(label=label))
     assert risk is Risk.PURCHASE, label
+
+
+ARTICLED = [
+    'Place an order', 'Place the order', 'Submit an order', 'Submit the order',
+    'Complete purchase', 'Charge the card on file', 'Charge the customer',
+]
+
+
+@pytest.mark.parametrize('label', ARTICLED)
+def test_articles_do_not_hide_a_purchase(label):
+    """Found by a real MCP tool description: `place an order` did not match a
+    pattern written as `place (your)? order`. The article between verb and noun
+    is the commonest phrasing there is."""
+    assert classify_click(el(label=label))[0] is Risk.PURCHASE, label
+
+
+NOT_BUYING_BUT_MENTIONS_ORDERS = [
+    'Search orders', 'View order history', 'Order details', 'Sort by order date',
+]
+
+
+@pytest.mark.parametrize('label', NOT_BUYING_BUT_MENTIONS_ORDERS)
+def test_merely_mentioning_orders_is_not_buying(label):
+    """The widened pattern must not swallow every screen with the word order
+    on it, or the prompt fires constantly and stops being read."""
+    assert classify_click(el(label=label))[0] is not Risk.PURCHASE, label

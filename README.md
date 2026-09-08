@@ -57,15 +57,26 @@ are waiting on you.
 
 **A browser client.** No build step: two websockets, streaming text, tool
 cards with the risk grade on them, inline diffs, approve and deny, and voice.
+A finished read is one grey line; what wants looking at — a failure, a diff, a
+screenshot — is a card, and every turn ends with how long it took and a
+receipt of the files it changed, with a button that puts them back. Approval,
+model, working root and provider sit under the box you type in, because all
+four of them qualify the next thing you say rather than the last one — and
+approval is live, so how much you trust a run is something you can change
+while watching it.
 
-**A companion, if you want one.** A pixel creature sits at the bottom of the
-transcript and reacts to what the agent is actually doing — it watches while
-files are read, paces once a build has been running for twenty-five seconds,
-and, if it is the moth, flies into the side of the window when something
-throws. Five of them, one at a time or none, and the choice is kept in your
-browser and sent nowhere. Each one is data — a palette, frames written as
-strings of characters, and a table of states — so a sixth is a new file
-rather than a change to an old one. `prefers-reduced-motion` stops the clock
+**A companion, if you want one.** A pixel creature reacts to what the agent is
+actually doing — it watches while files are read, paces once a build has been
+running for twenty-five seconds, and, if it is the moth, flies into the side
+of the window when something throws. It perches over the end of the
+transcript, marks the app in the sidebar, sits in the middle of a session
+that has not started yet, says in words what it is doing next to the send
+button, leans into an approval bar while that is what it is stuck on, and is
+the tab's icon — one creature and one state across all of them. Five to pick
+from, one at a time or none, and the choice is kept in your browser and sent
+nowhere. Each one is data — a palette, frames written as strings of
+characters, and a table of states — so a sixth is a new file rather than a
+change to an old one. `prefers-reduced-motion` stops the clock
 entirely: what it is doing still shows, it just stops moving while it does
 it.
 
@@ -82,6 +93,14 @@ agent inherits the session without ever needing a password.
 and key chords — vision and control of the actual screen, not just a browser
 tab. On Wayland it goes through the compositor's own screenshot tool and
 `/dev/uinput`, because X11 grabbers return a black image there.
+
+**Any MCP server, as tools.** Point it at a `.mcp.json` and every server in it
+becomes tools the agent can call. Servers are distrusted by default: a tool
+that declares itself read-only is still confirmed, because a server that can
+call itself harmless is a server that can opt out of the check it most needs.
+
+**Rewind.** Every turn that changes a file can be undone, including one that
+was interrupted halfway. See [docs/EXTENDING.md](docs/EXTENDING.md).
 
 **Full system access, if you want it.** `ROOST_UNCONFINED=true` gives it the
 whole filesystem and tells the model plainly that it is not sandboxed.
@@ -104,6 +123,8 @@ services, on one connection:
 | browser | `gemma4:12b` opened a page, read it and reported its buttons |
 | money | told to "place the order, just do it, do not ask me" in **unrestricted** mode, it stopped for a human |
 | desktop | captured a 2560x1440 Wayland screen and answered a specific question about it correctly |
+| MCP | called a tool on a live MCP server; the untrusted-server floor held |
+| rewind | overwrote a file, then put it back from the UI |
 
 ## What is not built yet
 

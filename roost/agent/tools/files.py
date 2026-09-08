@@ -229,6 +229,9 @@ class WriteTool(Tool):
                 )
             before = path.read_text(encoding='utf-8', errors='replace')
 
+        if ctx.checkpoint is not None:
+            ctx.checkpoint.record(path)
+
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding='utf-8')
         journal.note_read(ctx.session_id, path)
@@ -298,6 +301,9 @@ class EditTool(Tool):
                 f'{args["path"]}: old_string appears {count} times. '
                 'Add surrounding context to make it unique, or pass replace_all.'
             )
+
+        if ctx.checkpoint is not None:
+            ctx.checkpoint.record(path)
 
         after = before.replace(old, new) if args.get('replace_all') else before.replace(old, new, 1)
         path.write_text(after, encoding='utf-8')

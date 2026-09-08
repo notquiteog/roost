@@ -3,9 +3,15 @@
  * Which creature is on is a preference, not a setting: it is kept in this
  * browser, never sent anywhere, and turning it off leaves nothing behind but
  * a faint mark to turn it back on with.
+ *
+ * One creature, many perches. The same animal is on the perch above the
+ * composer, in the sidebar, next to the send button, on an empty session, and
+ * in the tab icon — all driven from one state, so it is never in two moods at
+ * once. Every perch is registered here; broadcasting to them is the whole of
+ * the plumbing.
  */
 
-import { Perch, portrait } from './engine.js';
+import { Perch, portrait, stateForTool } from './engine.js';
 import moth from './moth.js';
 import gargoyle from './gargoyle.js';
 import slime from './slime.js';
@@ -17,6 +23,31 @@ export const COMPANIONS = [moth, gargoyle, slime, mechbit, mandrake];
 const STORE = 'roost.companion';
 const DEFAULT = 'moth';
 const NONE = 'none';
+
+/* What the creature is doing, in words, for the places that have room for a
+   line of text next to it. The companion is the fast glance; this is the same
+   thing said plainly for anyone who would rather read it — and for a screen
+   reader, which cannot see a moth at all. */
+const CAPTIONS = {
+  idle: 'ready',
+  typing: 'listening',
+  thinking: 'thinking',
+  reading: 'reading',
+  writing: 'writing files',
+  running: 'running a command',
+  browsing: 'browsing',
+  desktop: 'using the desktop',
+  grinding: 'still working',
+  waiting: 'waiting for you',
+  listening: 'listening',
+  speaking: 'speaking',
+  success: 'done',
+  error: 'that went wrong',
+};
+
+export function caption(state) {
+  return CAPTIONS[state] || CAPTIONS.idle;
+}
 
 function remembered() {
   // Wrapped for the same reason the session id is: a browser with site data
@@ -45,15 +76,22 @@ const el = (tag, cls, text) => {
 
 class Companion {
   constructor() {
-    this.perch = null;
+    this.perches = [];
+    this.pickers = [];
+    this.watchers = [];
+    this.def = null;
     this.id = null;
-    this.root = null;
+    this.state = 'idle';
     this.quietUntil = 0;
   }
 
-  mount(root) {
-    if (!root) return;
-    this.root = root;
+  /* ------------------------------------------------------------- perches */
+
+  /* A picker is a perch you can click: the creature, and a menu of the others
+     behind it. There is more than one now — the sidebar has one too — and
+     they all set the same preference. */
+  mount(root, opts = {}) {
+    if (!root) return null;
     const canvas = el('canvas');
     canvas.setAttribute('aria-hidden', 'true');
 
@@ -64,36 +102,88 @@ class Companion {
     button.appendChild(canvas);
     button.appendChild(el('span', 'empty', '◌'));
 
-    const menu = el('div', 'companion-menu');
+    const menu = el('div', `companion-menu ${opts.place || 'above'}`);
     menu.hidden = true;
 
     root.appendChild(button);
     root.appendChild(menu);
-    this.button = button;
-    this.menu = menu;
-    this.perch = new Perch(canvas);
+
+    const picker = { root, button, menu, perch: new Perch(canvas, { scale: opts.scale }) };
+    this.perches.push(picker.perch);
+    this.pickers.push(picker);
 
     button.onclick = (e) => {
       e.stopPropagation();
-      this.toggleMenu();
+      const open = menu.hidden;
+      this.closeMenus();
+      if (open) {
+        menu.hidden = false;
+        button.setAttribute('aria-expanded', 'true');
+      }
     };
+    this.buildMenu(picker);
+
     // Anywhere else, and Escape, close it — the same two ways every menu in
     // every application closes.
-    document.addEventListener('click', () => this.closeMenu());
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') this.closeMenu();
-    });
+    if (!this.closers) {
+      this.closers = true;
+      document.addEventListener('click', () => this.closeMenus());
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') this.closeMenus();
+      });
+    }
 
-    this.buildMenu();
-    this.choose(remembered() || DEFAULT);
+    if (this.id === null) this.choose(remembered() || DEFAULT);
+    else this.dress(picker);
+    return picker;
   }
 
-  buildMenu() {
+  /* A perch with no menu behind it: the ones that are purely a readout. They
+     are made and unmade with whatever they sit on, so each hands back a way
+     to remove itself. */
+  attach(host, opts = {}) {
+    if (!host) return { remove() {} };
+    const canvas = el('canvas');
+    canvas.setAttribute('aria-hidden', 'true');
+    host.appendChild(canvas);
+
+    const perch = new Perch(canvas, { scale: opts.scale });
+    perch.use(this.def);
+    this.perches.push(perch);
+    // Whatever the agent is doing now, not `idle`: a perch made mid-turn
+    // should not claim the turn is over.
+    perch.set(this.state);
+
+    return {
+      canvas,
+      remove: () => {
+        perch.destroy();
+        canvas.remove();
+        const at = this.perches.indexOf(perch);
+        if (at >= 0) this.perches.splice(at, 1);
+      },
+    };
+  }
+
+  /* Told whenever the state changes, for the captions that sit beside a
+     creature and say the same thing in words. */
+  watch(fn) {
+    this.watchers.push(fn);
+    fn(this.state, this.def);
+  }
+
+  announce() {
+    for (const fn of this.watchers) fn(this.state, this.def);
+  }
+
+  /* --------------------------------------------------------------- menus */
+
+  buildMenu(picker) {
     const choose = (id) => (e) => {
       e.stopPropagation();
       this.choose(id);
-      this.closeMenu();
-      this.button.focus();
+      this.closeMenus();
+      picker.button.focus();
     };
 
     for (const def of COMPANIONS) {
@@ -107,7 +197,7 @@ class Companion {
       row.appendChild(text);
       row.onclick = choose(def.id);
       row.dataset.id = def.id;
-      this.menu.appendChild(row);
+      picker.menu.appendChild(row);
     }
 
     const off = el('button', 'row off');
@@ -118,23 +208,18 @@ class Companion {
     off.appendChild(text);
     off.onclick = choose(NONE);
     off.dataset.id = NONE;
-    this.menu.appendChild(off);
+    picker.menu.appendChild(off);
   }
 
-  toggleMenu() {
-    this.menu.hidden ? this.openMenu() : this.closeMenu();
+  closeMenus() {
+    for (const picker of this.pickers) {
+      if (picker.menu.hidden) continue;
+      picker.menu.hidden = true;
+      picker.button.setAttribute('aria-expanded', 'false');
+    }
   }
 
-  openMenu() {
-    this.menu.hidden = false;
-    this.button.setAttribute('aria-expanded', 'true');
-  }
-
-  closeMenu() {
-    if (!this.menu || this.menu.hidden) return;
-    this.menu.hidden = true;
-    this.button.setAttribute('aria-expanded', 'false');
-  }
+  /* ------------------------------------------------------------ choosing */
 
   choose(id) {
     const wanted = COMPANIONS.find((c) => c.id === id) || null;
@@ -144,23 +229,61 @@ class Companion {
     // A creature whose art does not check out is refused rather than drawn
     // wrong, so the perch has to end up looking empty even though something
     // was asked for — otherwise there is nothing left to click.
-    const broken = this.perch.use(wanted);
+    let broken = [];
+    for (const perch of this.perches) {
+      broken = perch.use(wanted);
+      perch.set(this.state);
+    }
     for (const problem of broken) console.error(`companion: ${problem}`);
-    const def = broken.length ? null : wanted;
+    this.def = broken.length ? null : wanted;
 
-    this.root.classList.toggle('off', !def);
-    this.button.title = def ? `${def.label} — click to change` : 'Companion';
-    this.button.setAttribute('aria-label', def ? `Companion: ${def.label}. Choose another.` : 'Choose a companion');
-    for (const row of this.menu.querySelectorAll('.row')) {
+    // One class, so every spot that carries a creature can collapse together
+    // when there is none. Turning the companion off should be the absence of
+    // a thing, not a row of empty boxes.
+    document.body.classList.toggle('companion-off', !this.def);
+    for (const picker of this.pickers) this.dress(picker);
+    this.favicon();
+    this.announce();
+  }
+
+  dress(picker) {
+    const def = this.def;
+    picker.root.classList.toggle('off', !def);
+    picker.button.title = def ? `${def.label} — click to change` : 'Companion';
+    picker.button.setAttribute('aria-label', def ? `Companion: ${def.label}. Choose another.` : 'Choose a companion');
+    for (const row of picker.menu.querySelectorAll('.row')) {
       row.setAttribute('aria-current', String(row.dataset.id === this.id));
     }
+  }
+
+  /* The tab icon is the creature too. It costs one canvas at selection time,
+     and it means a Roost tab in a row of twenty is findable by the animal on
+     it rather than by reading the titles. */
+  favicon() {
+    let link = document.querySelector('link[rel="icon"]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    if (!this.def) {
+      link.href = 'data:image/svg+xml,'
+        + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
+          + '<circle cx="8" cy="8" r="5" fill="none" stroke="%23888" stroke-width="1.5"/></svg>');
+      return;
+    }
+    const shot = portrait(this.def, 4);
+    if (shot) link.href = shot.toDataURL('image/png');
   }
 
   /* Everything below is what the client actually calls. Each is a no-op when
      there is no companion, so nothing that reports state has to check first. */
 
   set(state) {
-    if (this.perch) this.perch.set(state);
+    if (state === this.state) return;
+    this.state = state;
+    for (const perch of this.perches) perch.set(state);
+    this.announce();
   }
 
   /* Reattaching to a session replays what you missed, and a moment that has
@@ -173,16 +296,20 @@ class Companion {
   }
 
   flash(state) {
-    if (!this.perch || performance.now() < this.quietUntil) return;
-    this.perch.flash(state);
+    if (performance.now() < this.quietUntil) return;
+    for (const perch of this.perches) perch.flash(state);
+    // A flash is a moment, not a condition, so the captions are told about it
+    // and then told again when it lapses back to what is really going on.
+    for (const fn of this.watchers) fn(state, this.def);
+    setTimeout(() => this.announce(), 1300);
   }
 
   tool(name) {
-    if (this.perch) this.perch.tool(name);
+    this.set(stateForTool(name));
   }
 
   typing() {
-    if (this.perch) this.perch.typing();
+    for (const perch of this.perches) perch.typing();
   }
 }
 

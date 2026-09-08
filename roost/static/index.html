@@ -8,43 +8,83 @@
 </head>
 <body>
 
+<!-- Icons live here rather than in a sprite file: there are eight of them,
+     and a second request to fetch eight paths is a worse trade than the bytes. -->
+<svg id="icons" aria-hidden="true" hidden>
+  <symbol id="i-new" viewBox="0 0 16 16"><path d="M11.5 2.5 13.5 4.5 6 12l-3 1 1-3z"/><path d="M10 4 12 6"/></symbol>
+  <symbol id="i-memory" viewBox="0 0 16 16"><path d="M8 2.5a3 3 0 0 0-3 3v.2a2.3 2.3 0 0 0 0 4.6v.2a3 3 0 0 0 6 0v-.2a2.3 2.3 0 0 0 0-4.6v-.2a3 3 0 0 0-3-3Z"/><path d="M8 2.5v11"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 16 16"><path d="M3 8a5 5 0 1 0 1.6-3.7"/><path d="M3 3v3h3"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2 4.5h4l1.2 1.5H14v6.5H2z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 16 16"><path d="M8 2 13 4v4c0 3-2.2 5-5 6-2.8-1-5-3-5-6V4z"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 16 16"><rect x="6" y="2" width="4" height="7" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"/><path d="M8 12v2"/></symbol>
+  <symbol id="i-send" viewBox="0 0 16 16"><path d="M8 12.5v-9"/><path d="M4.5 7 8 3.5 11.5 7"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 16 16"><path d="M13.5 8.5c0 2.2-2.5 4-5.5 4a7 7 0 0 1-1.6-.2L3 13.5l.8-2.3A4.3 4.3 0 0 1 2.5 8.5c0-2.2 2.5-4 5.5-4s5.5 1.8 5.5 4Z"/></symbol>
+</svg>
+
 <aside id="sidebar">
-  <header>
+  <header id="brand">
+    <!-- The companion is the app icon. Clicking it opens the same picker the
+         perch does. -->
+    <div id="brand-pet"></div>
     <h1>Roost</h1>
-    <button id="new-session" title="New session">+</button>
+    <button id="new-session" class="icon" title="New session">
+      <svg class="ic"><use href="#i-new"></use></svg>
+    </button>
   </header>
-  <ul id="sessions" aria-label="Sessions"></ul>
-  <button id="open-memory" class="ghost" hidden>Memory</button>
-  <footer id="providers" aria-label="Providers"></footer>
+
+  <nav id="nav">
+    <button class="nav-row" id="nav-new">
+      <svg class="ic"><use href="#i-new"></use></svg><span>New session</span>
+    </button>
+    <button class="nav-row" id="nav-rewind" disabled>
+      <svg class="ic"><use href="#i-undo"></use></svg><span>Rewind</span>
+    </button>
+    <button class="nav-row" id="open-memory" hidden>
+      <svg class="ic"><use href="#i-memory"></use></svg><span>Memory</span>
+    </button>
+  </nav>
+
+  <div id="session-pane">
+    <div class="sec-head"><span>Sessions</span></div>
+    <ul id="sessions" aria-label="Sessions"></ul>
+  </div>
+
+  <footer id="foot">
+    <button id="providers-toggle" class="sec-head" aria-expanded="false">
+      <span>Providers</span><span class="chev">›</span>
+    </button>
+    <div id="providers" aria-label="Providers" hidden></div>
+  </footer>
 </aside>
 
 <main>
   <header id="bar">
     <div id="session-title">No session</div>
-    <div id="session-meta"></div>
+    <span id="session-meta" class="meta"></span>
     <div class="spacer"></div>
-    <label id="mode-wrap" hidden>
-      <span>Approval</span>
-      <select id="mode">
-        <option value="read_only">read only</option>
-        <option value="ask">ask</option>
-        <option value="auto_edit">auto edit</option>
-        <option value="trusted">trusted</option>
-        <option value="unrestricted">unrestricted</option>
-      </select>
-    </label>
-    <button id="voice-toggle" class="ghost" disabled>Start voice</button>
+    <span id="diffstat" class="diffstat" hidden></span>
+    <button id="rewind" class="icon" hidden title="Undo the agent's file changes">
+      <svg class="ic"><use href="#i-undo"></use></svg>
+    </button>
     <span id="link" class="pill off">offline</span>
   </header>
 
-  <div id="transcript" role="log" aria-live="polite"></div>
+  <div id="transcript" role="log" aria-live="polite">
+    <!-- What an empty session looks like: the companion, a question, and the
+         composer under it. Removed the moment there is anything to read. -->
+    <div id="hero" hidden>
+      <div id="hero-pet"></div>
+      <h2 id="hero-ask">What should we build?</h2>
+      <p id="hero-sub" class="meta"></p>
+    </div>
+  </div>
 
   <!-- Zero height, so the companion floats over the bottom of the transcript
        rather than taking a strip of it. -->
   <div id="perch-rail"><div id="perch"></div></div>
 
   <div id="voice-strip" hidden>
-    <span class="dot" id="voice-dot"></span>
+    <div id="voice-pet" class="mini"></div>
     <span id="voice-state">listening</span>
     <span id="voice-partial"></span>
     <div class="spacer"></div>
@@ -53,10 +93,48 @@
   </div>
 
   <form id="composer">
-    <textarea id="input" rows="1" placeholder="Ask it to do something…  (Enter to send, Shift+Enter for a newline)" disabled></textarea>
-    <button id="send" type="submit" disabled>Send</button>
-    <button id="stop" type="button" class="danger" hidden>Stop</button>
+    <div id="field">
+      <textarea id="input" rows="1" placeholder="Ask it to do something…  (Enter to send, Shift+Enter for a newline)" disabled></textarea>
+      <div id="controls">
+        <!-- The buddy, at thumbnail size, saying what it is doing in words.
+             Same state as the perch, close enough to the caret to catch. -->
+        <span id="buddy" class="chip flat" title="what it is doing right now">
+          <span id="buddy-pet" class="mini"></span>
+          <span id="buddy-state" aria-live="polite">ready</span>
+        </span>
+        <label id="mode-wrap" class="chip" hidden>
+          <svg class="ic"><use href="#i-shield"></use></svg>
+          <select id="mode">
+            <option value="read_only">read only</option>
+            <option value="ask">ask first</option>
+            <option value="auto_edit">auto edit</option>
+            <option value="trusted">trusted</option>
+            <option value="unrestricted">unrestricted</option>
+          </select>
+        </label>
+        <div class="spacer"></div>
+        <span id="model-chip" class="chip flat" hidden></span>
+        <button id="voice-toggle" type="button" class="icon" disabled title="Start voice">
+          <svg class="ic"><use href="#i-mic"></use></svg>
+        </button>
+        <button id="send" type="submit" class="round" disabled title="Send">
+          <svg class="ic"><use href="#i-send"></use></svg>
+        </button>
+        <button id="stop" type="button" class="round danger" hidden title="Stop">
+          <span class="square"></span>
+        </button>
+      </div>
+    </div>
+
+    <div id="context-row">
+      <span id="root-chip" class="chip flat" hidden>
+        <svg class="ic"><use href="#i-folder"></use></svg><span></span>
+      </span>
+      <span id="provider-chip" class="chip flat" hidden></span>
+    </div>
   </form>
+
+  <div id="starters" hidden></div>
 </main>
 
 <dialog id="new-dialog">
@@ -81,6 +159,24 @@
       <button value="create" id="create-session">Create</button>
     </menu>
   </form>
+</dialog>
+
+<dialog id="rewind-dialog">
+  <h2>Rewind</h2>
+  <p class="explain">
+    Put files back to how they were before a turn. This undoes that turn and every
+    one after it — undoing one in the middle would leave a state that never existed.
+  </p>
+  <p class="explain warn">
+    Only the agent's own file edits are recorded. Anything a shell command wrote is
+    not covered, and cannot be: snapshotting the whole filesystem before every
+    command is not something anyone wants.
+  </p>
+  <ul id="rewind-list"></ul>
+  <menu>
+    <div class="spacer"></div>
+    <button id="rewind-close" class="ghost">Close</button>
+  </menu>
 </dialog>
 
 <dialog id="memory-dialog">

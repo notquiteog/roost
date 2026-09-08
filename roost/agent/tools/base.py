@@ -63,6 +63,10 @@ class ToolContext:
     # file tools were confined and the shell was not, which is the worst of
     # both — a promise of containment that the most powerful tool ignored.
     confined: bool = True
+    # Snapshots files before they change, so a turn can be undone. None when
+    # checkpointing is off; the tools call it unconditionally and it does
+    # nothing, which keeps the null check out of every write path.
+    checkpoint: Any = None
     # Set for tools that need to reach a model of their own.
     user_routes: Any = None
     env: dict[str, str] = field(default_factory=dict)

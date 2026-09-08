@@ -226,6 +226,35 @@ def test_ids_match_their_files_and_are_registered():
         assert f"from './{c['id']}.js'" in index, f"{c['id']}.js is never imported"
 
 
+def test_every_state_has_a_caption():
+    """The creature is one half of the signal; the word beside it is the other.
+
+    The composer says what the agent is doing in plain language, and a state
+    with no caption falls back to "ready" — which does not read as a gap, it
+    reads as a claim that nothing is happening. That is the worst possible
+    way for this table to be incomplete.
+    """
+    engine = (COMPANIONS / 'engine.js').read_text()
+    at = engine.find('const CHAIN = {')
+    assert at != -1, 'could not find CHAIN in engine.js'
+    start, end = _span(engine, engine.index('{', at))
+    states = set(re.findall(r'(?m)^  (\w+): \[', engine[start:end]))
+    assert 'idle' in states and len(states) > 8
+
+    index = (COMPANIONS / 'index.js').read_text()
+    at = index.find('const CAPTIONS = {')
+    assert at != -1, 'could not find CAPTIONS in index.js'
+    start, end = _span(index, index.index('{', at))
+    captions = dict(re.findall(r"(?m)^  (\w+): '([^']+)',", index[start:end]))
+    assert captions, 'no captions parsed'
+
+    missing = states - set(captions)
+    assert not missing, f'states with nothing to say for themselves: {sorted(missing)}'
+
+    unknown = set(captions) - states
+    assert not unknown, f'captions for states nothing can be in: {sorted(unknown)}'
+
+
 def test_every_tool_moves_the_companion():
     """The creature reacts to the tool that is running, from a table of names.
 

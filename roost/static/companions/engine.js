@@ -189,9 +189,15 @@ const reduced = typeof window !== 'undefined' && window.matchMedia
   : null;
 
 export class Perch {
-  constructor(canvas) {
+  /* `scale` is how many canvas pixels one sprite pixel gets. It is per-perch
+     rather than global because the same creature now appears at several
+     sizes at once — a hand-sized one on the perch, a thumbnail in the
+     composer, a big one on an empty session — and they all animate off the
+     same state. */
+  constructor(canvas, opts = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+    this.scale = opts.scale || STAGE.scale;
     this.def = null;
     this.ambient = 'idle';
     this.since = performance.now();
@@ -201,12 +207,28 @@ export class Perch {
     this.frame = null;
     this.timer = null;
     this.resize();
-    window.addEventListener('resize', () => this.resize());
+    // Kept on the instance so `destroy` can take them off again: perches are
+    // created and thrown away with the cards they live on now, and a listener
+    // per dead perch is a leak with a frame loop attached.
+    this.onResize = () => this.resize();
+    this.onWake = () => this.pump();
+    window.addEventListener('resize', this.onResize);
     // A creature animating in a tab nobody is looking at is pure waste, and
     // on a laptop it is waste with a battery attached.
-    document.addEventListener('visibilitychange', () => this.pump());
+    document.addEventListener('visibilitychange', this.onWake);
     // Turned on or off while the page is open, not only at load.
-    if (reduced && reduced.addEventListener) reduced.addEventListener('change', () => this.pump());
+    if (reduced && reduced.addEventListener) reduced.addEventListener('change', this.onWake);
+  }
+
+  /* Take a perch down for good. Everything transient in the client — an
+     approval bar, a voice strip — can carry a creature, so they have to be
+     able to stop being one. */
+  destroy() {
+    this.def = null;
+    this.pump();
+    window.removeEventListener('resize', this.onResize);
+    document.removeEventListener('visibilitychange', this.onWake);
+    if (reduced && reduced.removeEventListener) reduced.removeEventListener('change', this.onWake);
   }
 
   /* Motion is decoration, and decoration that cannot be turned off is a
@@ -219,11 +241,11 @@ export class Perch {
     // Whole device pixels only. A fractional scale on nearest-neighbour art
     // gives some rows two pixels and others one, which reads as a wobble.
     const ratio = Math.max(1, Math.round(window.devicePixelRatio || 1));
-    this.unit = STAGE.scale * ratio;
+    this.unit = this.scale * ratio;
     this.canvas.width = STAGE.w * this.unit;
     this.canvas.height = STAGE.h * this.unit;
-    this.canvas.style.width = `${STAGE.w * STAGE.scale}px`;
-    this.canvas.style.height = `${STAGE.h * STAGE.scale}px`;
+    this.canvas.style.width = `${STAGE.w * this.scale}px`;
+    this.canvas.style.height = `${STAGE.h * this.scale}px`;
     this.ctx.imageSmoothingEnabled = false;
   }
 

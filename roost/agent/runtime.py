@@ -42,6 +42,12 @@ def web_tools(cfg: Any) -> list[Tool]:
     ]
 
 
+def mcp_tools(manager: Any) -> list[Tool]:
+    from roost.agent.tools.mcp import mcp_tools as build
+
+    return build(manager)
+
+
 def desktop_tools() -> list[Tool]:
     from roost.agent.tools.desktop import desktop_tools as build
 
@@ -87,6 +93,8 @@ def build_session(
     web: Any = None,
     browser: Any = None,
     desktop: bool = False,
+    mcp: Any = None,
+    checkpoints: Any = None,
 ) -> AgentSession:
     root_path = Path(root).expanduser().resolve()
     if not root_path.is_dir():
@@ -127,6 +135,8 @@ def build_session(
         chosen = [*chosen, *browser_tools(browser)]
     if desktop:
         chosen = [*chosen, *desktop_tools()]
+    if mcp is not None:
+        chosen = [*chosen, *mcp_tools(mcp)]
 
     context = prompt_mod.project_context(root_path)
     if extra_prompt:
@@ -148,4 +158,5 @@ def build_session(
         on_user_text=on_user_text,
         confined=confined,
         browser=browser,
+        checkpoints=checkpoints,
     )

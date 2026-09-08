@@ -23,6 +23,7 @@ from typing import Any
 from roost.agent.approval import Mode
 from roost.agent.runtime import build_session
 from roost.agent.session import AgentSession
+from roost.mcp.manager import manager as mcp_manager
 
 log = logging.getLogger(__name__)
 
@@ -65,12 +66,25 @@ class SessionManager:
                 BrowserConfig(profile_dir=cfg.browser_profile, headless=cfg.browser_headless)
             )
 
+        checkpoints = None
+        if cfg.checkpoints_enabled:
+            from roost.agent.checkpoint import CheckpointStore
+
+            # Under the data directory, never inside the working root — a
+            # snapshot in the tree the agent is editing gets read, grepped and
+            # eventually committed.
+            checkpoints = CheckpointStore(
+                Path(cfg.memory_db).parent / 'checkpoints' / (session_id or 'session')
+            )
+
         session = build_session(
             root=root, provider=provider, model=model, mode=mode, session_id=session_id,
             title=title or Path(root).name, memory=memory, user_id=user_id,
             confined=not cfg.unconfined,
             allow_purchases=cfg.allow_purchases,
             allow_credentials=cfg.allow_credentials,
+            mcp=mcp_manager if cfg.mcp_enabled and mcp_manager.servers else None,
+            checkpoints=checkpoints,
             web=cfg if cfg.web_enabled else None,
             browser=browser,
             desktop=cfg.desktop_enabled,

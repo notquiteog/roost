@@ -51,9 +51,15 @@ def normalise(text: str) -> str:
 # order btn` and hits the same pattern the visible label does.
 _BUYING = re.compile(
     r'\b(?:'
-    r'place\s+(?:your\s+)?order|buy\s+now|buy\s+it\s+now|complete\s+purchase|'
+    # An article or possessive gets between the verb and the noun constantly:
+    # "place an order", "place the order", "submit your order". Requiring
+    # exactly "place order" or "place your order" missed the commonest phrasing
+    # of all, which a real MCP tool description caught.
+    r'place\s+(?:\w+\s+)?order|buy\s+now|buy\s+it\s+now|complete\s+purchase|'
     r'confirm\s+(?:and\s+)?pay|confirm\s+order|confirm\s+purchase|pay\s+now|'
-    r'submit\s+order|proceed\s+to\s+payment|authoris\w*\s+payment|authoriz\w*\s+payment|'
+    # Charging a card is the act itself, however it is described.
+    r'charge\s+(?:\w+\s+){0,3}?card|charge\s+(?:\w+\s+){0,2}?(?:account|customer)|'
+    r'submit\s+(?:\w+\s+)?order|proceed\s+to\s+payment|authoris\w*\s+payment|authoriz\w*\s+payment|'
     # Adjectives pile up between the verb and the noun far more than you would
     # guess: "start my 30 day free trial" is five words. Measured against a
     # real page, {0,3} missed it.

@@ -62,6 +62,19 @@ class Config:
     search_key: str = field(default_factory=lambda: os.getenv('ROOST_SEARCH_KEY', ''))
     search_url: str = field(default_factory=lambda: os.getenv('ROOST_SEARCH_URL', ''))
 
+    # Undo for the agent's own file edits. On by default: it is cheap, and the
+    # moment you want it is always after the fact.
+    checkpoints_enabled: bool = field(default_factory=lambda: _bool('ROOST_CHECKPOINTS', True))
+
+    # --- MCP --------------------------------------------------------------
+    # Servers are read from a `.mcp.json` in the shape the rest of the
+    # ecosystem uses, so a file written for another client works unchanged.
+    mcp_config: Path = field(
+        default_factory=lambda: Path(os.getenv('ROOST_MCP_CONFIG', '')) if os.getenv('ROOST_MCP_CONFIG')
+        else Path.cwd() / '.mcp.json'
+    )
+    mcp_enabled: bool = field(default_factory=lambda: _bool('ROOST_MCP', True))
+
     # --- the desktop ------------------------------------------------------
     # Screenshotting the screen and driving the mouse and keyboard. Off by
     # default: it is the widest capability here and the one with the weakest

@@ -121,6 +121,7 @@ class AgentSession:
         on_user_text: Any = None,
         confined: bool = True,
         browser: Any = None,
+        checkpoints: Any = None,
     ) -> None:
         self.id = session_id or uuid.uuid4().hex[:16]
         self.title = title
@@ -132,6 +133,9 @@ class AgentSession:
         # Owned here so it dies with the session: an abandoned Chromium is
         # 200 MB, and sessions outlive their client by design.
         self.browser = browser
+        # Undo for this session's own file edits. See checkpoint.py for what it
+        # does not cover — a shell command can write anywhere.
+        self.checkpoints = checkpoints
         self.provider = provider
         self.model = model
         self.policy = policy or ApprovalPolicy()
@@ -324,6 +328,11 @@ class AgentSession:
     async def _run_turn(self, turn_id: str, text: str, attachments: list[dict[str, Any]]) -> None:
         await self._emit(TurnStarted(session_id=self.id, turn_id=turn_id, text=text))
 
+        if self.checkpoints is not None:
+            # Opened before anything runs, so the snapshot is of the tree as it
+            # was when the person asked, not partway through the answer.
+            self.checkpoints.begin(turn_id, text[:80])
+
         # Recall runs before the first request, so what is remembered is in
         # front of the model from the outset rather than arriving a step late.
         self._turn_context = ''
@@ -383,6 +392,10 @@ class AgentSession:
 
         except asyncio.CancelledError:
             stop_reason = 'interrupted'
+            if self.checkpoints is not None:
+                # Kept, not discarded: a turn cut off halfway is the one most
+                # likely to have left the tree somewhere nobody wanted.
+                self.checkpoints.commit()
             # Recorded in the history so the next turn's context shows the work
             # was cut off rather than completed.
             self.messages.append(
@@ -404,6 +417,9 @@ class AgentSession:
                     retryable=isinstance(exc, (asyncio.TimeoutError, ConnectionError)),
                 )
             )
+
+        if self.checkpoints is not None:
+            self.checkpoints.commit()
 
         await self._emit(
             TurnCompleted(session_id=self.id, turn_id=turn_id, stop_reason=stop_reason, usage=usage_total)
@@ -619,4 +635,5 @@ class AgentSession:
             session_id=self.id,
             env=self.env,
             confined=self.confined,
+            checkpoint=self.checkpoints,
         )

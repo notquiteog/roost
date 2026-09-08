@@ -10,7 +10,7 @@
  * everything else.
  */
 
-import { companion } from './companions/index.js';
+import { companion, caption } from './companions/index.js';
 
 const $ = (sel) => document.querySelector(sel);
 const el = (tag, cls, text) => {
@@ -19,6 +19,30 @@ const el = (tag, cls, text) => {
   if (text !== undefined) node.textContent = text;
   return node;
 };
+
+/* One of the symbols defined at the top of the page. */
+function icon(name) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'ic');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', `#i-${name}`);
+  svg.appendChild(use);
+  return svg;
+}
+
+function ago(seconds) {
+  if (seconds < 60) return 'now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+  return `${Math.floor(seconds / 86400)}d`;
+}
+
+function took(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
+  const mins = Math.floor(ms / 60000);
+  return `${mins}m ${Math.round((ms % 60000) / 1000)}s`;
+}
 
 const state = {
   sessionId: null,
@@ -30,8 +54,20 @@ const state = {
   tools: new Map(),
   // Commands typed while the socket was down, replayed on reconnect.
   outbox: [],
+  // Consecutive failed reconnects, for the backoff.
+  retries: 0,
   // The locally echoed user bubble, removed when the server confirms the turn.
   echo: null,
+  // What the open session is, for the chips under the composer.
+  info: null,
+  // When the running turn started, so the transcript can say how long it took.
+  turnStart: 0,
+  // Files this turn has written, and by how much, from the diffs the server
+  // already sends. Emptied at the start of every turn.
+  turnFiles: new Map(),
+  // The same counted across the whole session, for the bar.
+  added: 0,
+  removed: 0,
 };
 
 /* ---------------------------------------------------------------- transcript */
@@ -49,11 +85,77 @@ function append(node) {
   const follow = atBottom();
   transcript.appendChild(node);
   if (follow) transcript.scrollTop = transcript.scrollHeight;
+  settle();
   return node;
 }
 
+/* An empty session is a different window: the companion in the middle, the
+   question above the box, and a few things you might ask. The moment there is
+   anything to read, all of that goes and the transcript takes the room. */
+function settle() {
+  const empty = !transcript.querySelector('.turn, .tool, .question, .notice, .changed, .worked');
+  document.body.classList.toggle('blank', empty);
+  $('#hero').hidden = !empty;
+  $('#starters').hidden = !empty;
+}
+
+function clearTranscript() {
+  for (const node of [...transcript.children]) {
+    if (node.id !== 'hero') node.remove();
+  }
+  settle();
+}
+
+/* The greeting names the folder the agent is actually pointed at, because
+   that is the one fact about a new session worth checking before you type. */
+function dressHero() {
+  const info = state.info;
+  const where = info && info.root ? info.root.replace(/\/+$/, '').split('/').pop() : '';
+  $('#hero-ask').textContent = where ? `What should we do in ${where}?` : 'What should we do?';
+  $('#hero-sub').textContent = info ? [info.model, info.policy].filter(Boolean).join('  ·  ') : '';
+}
+
+const STARTERS = [
+  'Have a look around this folder and tell me what it is',
+  'Find the tests and run them',
+  'Explain what the most recent change does',
+  'Look something up on the web for me',
+];
+
+function buildStarters() {
+  const box = $('#starters');
+  box.textContent = '';
+  for (const text of STARTERS) {
+    const row = el('button', 'starter');
+    row.type = 'button';
+    row.appendChild(icon('chat'));
+    row.appendChild(el('span', '', text));
+    // Filled in rather than sent. A suggestion you cannot edit before it runs
+    // is a button that does something to your machine on one click.
+    row.onclick = () => {
+      const input = $('#input');
+      input.value = text;
+      input.focus();
+      input.dispatchEvent(new Event('input'));
+    };
+    box.appendChild(row);
+  }
+}
+
 function notice(text, kind = '') {
-  return append(el('div', `notice ${kind}`, text));
+  // The same message twice in a row is collapsed into a count. Even with the
+  // retry loop fixed, anything that can repeat should not be able to bury the
+  // transcript under copies of itself.
+  const last = transcript.lastElementChild;
+  if (last && last.classList.contains('notice') && last.dataset.text === text) {
+    const n = Number(last.dataset.count || 1) + 1;
+    last.dataset.count = String(n);
+    last.textContent = `${text}  (×${n})`;
+    return last;
+  }
+  const node = el('div', `notice ${kind}`, text);
+  node.dataset.text = text;
+  return append(node);
 }
 
 function userTurn(text) {
@@ -150,18 +252,77 @@ function renderDiff(text) {
 
 /* --------------------------------------------------------------- tool cards */
 
+/* What the agent did, said as a person would say it. The tool name is exact
+   and useless at a glance; "Ran" followed by the command is what someone
+   skimming a transcript is actually reading for. Anything not listed falls
+   back to its own name in monospace, which is honest about being a tool. */
+const VERBS = {
+  read_file: 'Read',
+  list_dir: 'Listed',
+  glob: 'Found',
+  grep: 'Searched',
+  recall: 'Recalled',
+  write_file: 'Wrote',
+  edit_file: 'Edited',
+  remember: 'Remembered',
+  shell: 'Ran',
+  web_search: 'Searched the web for',
+  web_fetch: 'Fetched',
+  browser_navigate: 'Opened',
+  browser_read: 'Read the page',
+  browser_click: 'Clicked',
+  browser_type: 'Typed into',
+  browser_screenshot: 'Looked at',
+  browser_hand_over: 'Handed you',
+  desktop_screenshot: 'Looked at the screen',
+  desktop_click: 'Clicked',
+  desktop_type: 'Typed',
+  desktop_key: 'Pressed',
+  ask_user: 'Asked you',
+};
+
+/* A finished, unremarkable call is one grey line; a card is for what wants
+   looking at. This decides which, and it is called again when the call ends,
+   because "unremarkable" is not knowable until then. */
+function setCard(card, on) {
+  card.classList.toggle('card', on);
+  card.classList.toggle('open', on);
+}
+
 function toolCard(call, needsApproval) {
   const card = el('div', 'tool');
   const head = el('div', 'head');
-  head.appendChild(el('span', 'name', call.name));
+
+  const verb = VERBS[call.name];
+  if (verb) head.appendChild(el('span', 'verb', verb));
+  else head.appendChild(el('span', 'name', call.name));
   head.appendChild(el('span', 'summary', call.summary || ''));
+  head.appendChild(el('span', 'took'));
   head.appendChild(el('span', `risk ${call.risk}`, call.risk));
+  head.appendChild(el('span', 'chev', '›'));
+
+  // The whole head is the disclosure control: a chevron you have to hit
+  // exactly is a worse target than the line it sits on.
+  head.onclick = () => {
+    const open = card.classList.toggle('open');
+    if (open) card.classList.add('card');
+    else card.classList.toggle('card', card.classList.contains('failed') || Boolean(card.querySelector('.decide')));
+  };
   card.appendChild(head);
   append(card);
   state.tools.set(call.id, card);
 
   if (needsApproval) {
+    setCard(card, true);
     const bar = el('div', 'decide');
+
+    // The companion leans in where the decision is. It is the same creature
+    // in the same state as the one on the perch — it just sits next to the
+    // thing it is stuck on, so the reason it stopped is where you are looking.
+    const who = el('span', 'who');
+    bar.appendChild(who);
+    const pet = companion.attach(who, { scale: 2 });
+
     bar.appendChild(el('span', 'why', 'Waiting for you.'));
 
     const remember = el('label');
@@ -179,14 +340,18 @@ function toolCard(call, needsApproval) {
 
     const deny = el('button', 'ghost small', 'Deny');
     const allow = el('button', 'primary small', 'Allow');
+    const decided = () => {
+      pet.remove();
+      bar.remove();
+    };
     deny.onclick = () => {
       send({ type: 'tool.deny', call_id: call.id, reason: 'declined in the UI' });
-      bar.remove();
+      decided();
       companion.set('thinking');
     };
     allow.onclick = () => {
       send({ type: 'tool.approve', call_id: call.id, remember: box.checked });
-      bar.remove();
+      decided();
       // Approval is the only signal that this call is now running: the server
       // sends no separate "started" for a call it was already told about.
       companion.tool(call.name);
@@ -206,12 +371,53 @@ function toolOutput(callId, text, stream) {
   if (!out) {
     out = el('div', 'out live');
     card.appendChild(out);
+    // Output arriving now is worth watching now — a build scrolling past is
+    // the one thing in here nobody wants folded away.
+    setCard(card, true);
   }
   if (stream === 'stderr') out.classList.add('err');
   out.textContent += text;
   // A long build must not push everything else off screen.
   if (out.textContent.length > 40000) out.textContent = out.textContent.slice(-40000);
   out.scrollTop = out.scrollHeight;
+}
+
+/* How much of a file changed, counted off the unified diff the server already
+   sends. It is the same number `git diff --stat` would print, and it is free:
+   the diff is on screen either way. */
+function countDiff(text) {
+  let add = 0;
+  let del = 0;
+  for (const line of text.split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) add++;
+    else if (line.startsWith('-') && !line.startsWith('---')) del++;
+  }
+  return { add, del };
+}
+
+function noteChange(path, diff) {
+  const counts = countDiff(diff);
+  const at = state.turnFiles.get(path) || { add: 0, del: 0 };
+  at.add += counts.add;
+  at.del += counts.del;
+  state.turnFiles.set(path, at);
+  state.added += counts.add;
+  state.removed += counts.del;
+  showDiffstat();
+}
+
+function showDiffstat() {
+  const box = $('#diffstat');
+  box.textContent = '';
+  if (!state.added && !state.removed) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  box.appendChild(el('span', 'add', `+${state.added}`));
+  box.appendChild(document.createTextNode(' '));
+  box.appendChild(el('span', 'del', `-${state.removed}`));
+  box.title = 'what the agent has changed in this session';
 }
 
 function toolDone(result) {
@@ -237,6 +443,7 @@ function toolDone(result) {
   const diff = result.display && result.display.diff;
   if (diff) {
     card.appendChild(renderDiff(diff));
+    if (result.ok && result.display.path) noteChange(result.display.path, diff);
   } else if (!live && !shot && result.content) {
     const out = el('div', result.ok ? 'out' : 'out err');
     out.textContent = result.content.length > 4000 ? result.content.slice(0, 4000) + '\n…' : result.content;
@@ -247,8 +454,66 @@ function toolDone(result) {
     markClick(card, result.display.x, result.display.y, result.display.label);
   }
 
-  const meta = card.querySelector('.summary');
-  if (meta && result.duration_ms > 400) meta.textContent += `   ${(result.duration_ms / 1000).toFixed(1)}s`;
+  // Anything that failed, changed a file, or has a picture in it stays a card
+  // and stays open. A successful read collapses to its line: it is in the
+  // transcript so you can check, not so you have to.
+  setCard(card, !result.ok || Boolean(shot || diff));
+
+  const when = card.querySelector('.took');
+  if (when && result.duration_ms > 400) when.textContent = took(result.duration_ms);
+}
+
+/* ------------------------------------------------------------ what changed */
+
+/* The receipt at the end of a turn: which files it touched, by how much, and
+   one button that puts them back. The list is built from the diffs that came
+   past during the turn, so it says exactly what this client watched happen. */
+function changedCard() {
+  if (!state.turnFiles.size) return;
+  const files = [...state.turnFiles.entries()];
+  state.turnFiles = new Map();
+
+  const box = el('div', 'changed');
+  const top = el('div', 'top');
+  top.appendChild(el('span', 'what', `${files.length} file${files.length === 1 ? '' : 's'} changed`));
+
+  const undo = el('button', 'ghost small undo');
+  undo.appendChild(icon('undo'));
+  undo.appendChild(el('span', '', 'Undo'));
+  undo.onclick = () => undoLast(undo);
+  top.appendChild(undo);
+  box.appendChild(top);
+
+  for (const [path, counts] of files) {
+    const row = el('div', 'file');
+    const short = path.replace(/^.*\/([^/]+\/[^/]+)$/, '$1');
+    const name = el('span', 'path', short);
+    name.title = path;
+    row.appendChild(name);
+    if (counts.add) row.appendChild(el('span', 'add', `+${counts.add}`));
+    if (counts.del) row.appendChild(el('span', 'del', `-${counts.del}`));
+    box.appendChild(row);
+  }
+  append(box);
+}
+
+/* Undo means the newest checkpoint, which is the one this turn made. Anything
+   more selective than that is what the Rewind dialog is for — and rewinding
+   to the middle of a session is exactly what the checkpoint code refuses to
+   do, because it would leave a state that never existed. */
+async function undoLast(button) {
+  const res = await api(`/api/sessions/${state.sessionId}/checkpoints`);
+  if (!res || !res.ok) return;
+  const { enabled, checkpoints } = await res.json();
+  if (!enabled || !checkpoints.length) {
+    notice('There is no checkpoint to undo to — checkpoints are off for this session.', 'error');
+    return;
+  }
+  const cp = checkpoints[0];
+  if (!confirm(`Put files back to before "${cp.label}"?\n\nThis undoes that turn and every one after it.`)) return;
+  button.disabled = true;
+  await restore(cp.id);
+  button.disabled = false;
 }
 
 function questionCard(ev) {
@@ -311,7 +576,10 @@ function flushOutbox() {
 
 function setBusy(busy) {
   state.busy = busy;
+  // The send button becomes the stop button while a turn is running: one
+  // place to look, and no way to queue a second turn into a busy session.
   $('#send').disabled = busy || !state.sessionId;
+  $('#send').hidden = busy;
   $('#stop').hidden = !busy;
 }
 
@@ -320,6 +588,12 @@ function setLink(on) {
   pill.textContent = on ? 'live' : 'offline';
   pill.className = `pill ${on ? 'on' : 'off'}`;
 }
+
+// Close codes the server uses for "this will never work". Retrying any of
+// them is how one dead session id becomes an unbounded stream of identical
+// errors — which is exactly what happened when the daemon was restarted under
+// a page that still remembered a session from the previous one.
+const FATAL_CLOSE = new Set([4400, 4401, 4404]);
 
 function connectAgent(sessionId) {
   if (state.agent) {
@@ -341,34 +615,69 @@ function connectAgent(sessionId) {
 
   ws.onopen = () => {
     setLink(true);
+    state.retries = 0;
     // Whatever arrives next is the replay of what was missed, not news.
     companion.resumed();
     $('#input').disabled = false;
     $('#send').disabled = false;
     $('#voice-toggle').disabled = false;
+    $('#rewind').hidden = false;
+    $('#nav-rewind').disabled = false;
     flushOutbox();
   };
 
   ws.onmessage = (msg) => handleAgentEvent(JSON.parse(msg.data));
 
-  ws.onclose = () => {
+  ws.onclose = (event) => {
     setLink(false);
-    // The session is still there; only our view of it went away. Retry
-    // quietly rather than announcing a failure that is usually a laptop lid.
+    if (state.sessionId !== sessionId) return;      // we moved on deliberately
+
+    if (FATAL_CLOSE.has(event.code)) {
+      // Nothing to retry. The commonest cause by far is the daemon having been
+      // restarted while this page kept the old session id, so rather than
+      // stopping with an error, forget it and attach to whatever is there now.
+      forgetSession();
+      state.sessionId = null;
+      state.retries = 0;
+      loadSessions();
+      return;
+    }
+
+    // Genuinely transient — a laptop lid, a daemon restarting. Backed off
+    // rather than hammered, and capped so it keeps trying all day at a
+    // sensible rate.
+    state.retries = (state.retries || 0) + 1;
+    const wait = Math.min(1000 * 2 ** (state.retries - 1), 20000);
     setTimeout(() => {
       if (state.sessionId === sessionId) connectAgent(sessionId);
-    }, 1500);
+    }, wait);
   };
 }
 
 function handleAgentEvent(ev) {
   switch (ev.type) {
     case 'session.started':
-      $('#session-meta').textContent = `${ev.model} · ${ev.policy}`;
+      // The promise, spelled out, once: what this session may do without
+      // asking. The chips under the composer carry the short forms of the
+      // same facts, so repeating the model here would only crowd the title.
+      $('#session-meta').textContent = ev.policy;
+      $('#mode-wrap').title = ev.policy;
+      dressChips({ model: ev.model, root: ev.cwd });
+      break;
+
+    case 'policy.changed':
+      $('#mode').value = ev.mode;
+      dressChips({ policy: ev.mode });
+      notice(`Approval is now: ${ev.policy || ev.mode}.`);
       break;
 
     case 'turn.started':
       state.turnNode = null;
+      // The server's clock, not this one: a reattached client replays turns
+      // that ended hours ago, and timing them against `now` would report
+      // every one of them as having taken a millisecond.
+      state.turnStart = ev.at || 0;
+      state.turnFiles = new Map();
       setBusy(true);
       companion.set('thinking');
       // Rendered from the event rather than on submit, so a live client and a
@@ -425,15 +734,24 @@ function handleAgentEvent(ev) {
       companion.set('waiting');
       break;
 
-    case 'turn.completed':
+    case 'turn.completed': {
       setBusy(false);
       state.turnNode = null;
       companion.set('idle');
+      // How long that took, and what it cost you in files. Both are things
+      // you would otherwise have to reconstruct by scrolling. Said only when
+      // both ends of it are known — a made-up duration is worse than none.
+      if (state.turnStart && ev.at) {
+        append(el('div', 'worked', `Worked for ${took((ev.at - state.turnStart) * 1000)}`));
+      }
+      state.turnStart = 0;
+      changedCard();
       if (ev.stop_reason === 'interrupted') notice('Interrupted.');
       else if (ev.stop_reason === 'max_steps') notice('Stopped: too many steps.', 'error');
       else if (ev.stop_reason === 'error') companion.flash('error');
       else companion.flash('success');
       break;
+    }
 
     case 'error':
       notice(ev.message, 'error');
@@ -565,7 +883,7 @@ class Voice {
       const id = new TextDecoder().decode(view.slice(0, 12)).trim();
       const pcm = new Int16Array(msg.data.slice(12));
       if (this.player) this.player.push(id, pcm);
-      setVoiceDot('speaking');
+      companion.set('speaking');
       return;
     }
 
@@ -579,12 +897,10 @@ class Voice {
         break;
 
       case 'vad.speech_started':
-        setVoiceDot('hearing');
         companion.set('listening');
         break;
 
       case 'vad.speech_stopped':
-        setVoiceDot('');
         companion.set('thinking');
         break;
 
@@ -611,13 +927,11 @@ class Voice {
         // The decisive moment. Everything already scheduled has to go, or the
         // assistant keeps talking over you for as long as the buffer lasts.
         if (this.player) this.player.cancel();
-        setVoiceDot('');
         notice('— interrupted');
         companion.set('listening');
         break;
 
       case 'speech.stopped':
-        setVoiceDot('');
         companion.set('idle');
         break;
 
@@ -653,18 +967,128 @@ class Voice {
     this.ws = this.ctx = this.stream = this.player = null;
     companion.set('idle');
     $('#voice-strip').hidden = true;
-    $('#voice-toggle').textContent = 'Start voice';
+    $('#voice-toggle').classList.remove('on');
+    $('#voice-toggle').title = 'Start voice';
     state.voice = null;
   }
 }
 
-function setVoiceDot(cls) {
-  $('#voice-dot').className = `dot ${cls}`;
-}
 function setVoiceState(text) {
   $('#voice-state').textContent = text;
 }
 
+
+/* --------------------------------------------------------------- requests */
+
+/* Every call to the daemon goes through here.
+ *
+ * The page is expected to outlive the process it talks to: the daemon gets
+ * restarted, the laptop sleeps, the tab sits open overnight. So a failed fetch
+ * is an ordinary condition, not an exception — and an unhandled rejection in
+ * the five-second poll is particularly bad, because that poll is the thing
+ * that notices the daemon came back. */
+async function api(path, options) {
+  try {
+    const res = await fetch(path, options);
+    setReachable(true);
+    return res;
+  } catch {
+    // A network-level failure: the daemon is not listening.
+    setReachable(false);
+    return null;
+  }
+}
+
+let reachable = true;
+
+function setReachable(ok) {
+  if (ok === reachable) return;
+  reachable = ok;
+  const pill = $('#link');
+  if (!ok) {
+    pill.textContent = 'no daemon';
+    pill.className = 'pill off';
+  }
+}
+
+/* ------------------------------------------------------------------ rewind */
+
+async function loadRewind() {
+  const list = $('#rewind-list');
+  list.textContent = '';
+  const res = await api(`/api/sessions/${state.sessionId}/checkpoints`);
+  if (!res || !res.ok) return;
+  const { enabled, checkpoints } = await res.json();
+  if (!enabled) return;
+
+  if (!checkpoints.length) {
+    const li = el('li', 'empty', 'Nothing to undo — no files have been changed yet.');
+    list.appendChild(li);
+    return;
+  }
+
+  for (const cp of checkpoints) {
+    const li = el('li');
+    const what = el('div', 'what');
+    what.appendChild(el('span', 'label', cp.label || `turn ${cp.turn_id}`));
+    const names = cp.paths.map((p) => p.split('/').pop()).join(', ');
+    what.appendChild(el('div', 'files', `${cp.files} file${cp.files === 1 ? '' : 's'} · ${names}`));
+    li.appendChild(what);
+
+    const go = el('button', 'ghost small', 'Undo to here');
+    go.onclick = async () => {
+      // Named plainly rather than as "restore": what it does is throw away
+      // work, and the button should say so before it is pressed.
+      if (!confirm(`Put files back to before "${cp.label}"?\n\nThis undoes that turn and every one after it.`)) return;
+      if (await restore(cp.id)) loadRewind();
+    };
+    li.appendChild(go);
+    list.appendChild(li);
+  }
+}
+
+/* Shared by the Rewind dialog and by the Undo button on a turn's receipt:
+   both throw the same work away, so both had better report it the same way. */
+async function restore(checkpointId) {
+  const r = await api(`/api/sessions/${state.sessionId}/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ checkpoint: checkpointId }),
+  });
+  if (!r) {
+    notice('The daemon is not reachable.', 'error');
+    return false;
+  }
+  if (!r.ok) {
+    notice((await r.json()).detail || 'could not rewind', 'error');
+    return false;
+  }
+  const report = await r.json();
+  const bits = [];
+  if (report.restored.length) bits.push(`${report.restored.length} restored`);
+  if (report.deleted.length) bits.push(`${report.deleted.length} deleted`);
+  if (report.skipped && Object.keys(report.skipped).length) {
+    bits.push(`${Object.keys(report.skipped).length} skipped`);
+  }
+  notice(`Rewound: ${bits.join(', ') || 'nothing to change'}.`);
+  // Worth saying out loud: those files had been edited by hand since, and
+  // that work has just been overwritten.
+  if (report.changed_since && report.changed_since.length) {
+    notice(
+      `${report.changed_since.length} file(s) had been changed since the agent wrote them, ` +
+      `and were overwritten: ${report.changed_since.join(', ')}`,
+      'error',
+    );
+  }
+  return true;
+}
+
+function wireRewind() {
+  const open = () => { loadRewind(); $('#rewind-dialog').showModal(); };
+  $('#rewind').onclick = open;
+  $('#nav-rewind').onclick = open;
+  $('#rewind-close').onclick = () => $('#rewind-dialog').close();
+}
 
 /* ------------------------------------------------------------------ memory */
 
@@ -673,8 +1097,8 @@ function setVoiceState(text) {
    a feature that is not there. */
 
 async function memorySettings() {
-  const res = await fetch('/api/memory/settings');
-  if (res.status === 404) return null;      // not enabled on this server
+  const res = await api('/api/memory/settings');
+  if (!res || res.status === 404) return null;   // unreachable, or not enabled here
   return res.ok ? res.json() : null;
 }
 
@@ -702,7 +1126,8 @@ async function loadMemory() {
     return;
   }
 
-  const res = await fetch('/api/memory');
+  const res = await api('/api/memory');
+  if (!res || !res.ok) return;
   const { memories } = await res.json();
   $('#mem-count').textContent = memories.length
     ? `${memories.length} remembered.`
@@ -718,7 +1143,7 @@ async function loadMemory() {
 
     const forget = el('button', 'ghost forget', 'Forget');
     forget.onclick = async () => {
-      await fetch(`/api/memory/${m.id}`, { method: 'DELETE' });
+      await api(`/api/memory/${m.id}`, { method: 'DELETE' });
       loadMemory();
     };
     li.appendChild(forget);
@@ -727,7 +1152,7 @@ async function loadMemory() {
 }
 
 async function saveMemorySettings() {
-  await fetch('/api/memory/settings', {
+  await api('/api/memory/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -752,7 +1177,7 @@ function wireMemory() {
     // Irreversible and it also switches memory back off, so it is worth one
     // question — but only one.
     if (!confirm('Delete everything Roost remembers about you? This cannot be undone.')) return;
-    await fetch('/api/memory', { method: 'DELETE' });
+    await api('/api/memory', { method: 'DELETE' });
     loadMemory();
   };
 
@@ -766,50 +1191,126 @@ function wireMemory() {
 let refreshTimer = null;
 function refreshSessionsSoon() {
   clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(loadSessions, 700);
+  refreshTimer = setTimeout(() => loadSessions().catch(() => {}), 700);
 }
 
 async function loadSessions() {
-  const res = await fetch('/api/sessions');
-  if (!res.ok) return;
+  const res = await api('/api/sessions');
+  if (!res || !res.ok) return;
   const { sessions } = await res.json();
+
+  // The poll knows the truth sooner than the socket does. If the session we
+  // are holding is not in the list, it is gone — the daemon was restarted —
+  // and waiting for the websocket to work that out means sitting in backoff
+  // for up to twenty seconds on an id that will never resolve.
+  if (state.sessionId && !sessions.some((s) => s.id === state.sessionId)) {
+    forgetSession();
+    state.sessionId = null;
+    state.retries = 0;
+    if (state.agent) {
+      state.agent.onclose = null;      // do not let it schedule another retry
+      state.agent.close();
+      state.agent = null;
+    }
+  }
 
   // On a fresh page, reattach to whatever was open. The session outlived the
   // tab; the point of that is undermined if reopening starts from nothing.
   if (!state.sessionId && sessions.length) {
     const wanted = lastSession();
     const resume = sessions.find((s) => s.id === wanted) || sessions[0];
-    if (resume) {
-      $('#session-title').textContent = resume.title || resume.id;
-      $('#mode-wrap').hidden = false;
-      $('#mode').value = resume.policy;
-      selectSession(resume.id);
-    }
+    if (resume) openSession(resume);
   }
 
+  // Grouped by working root. A root is the only thing a session is really
+  // *about* — everything else about it is history — so it is what the list
+  // sorts itself under, and one machine running three projects reads as
+  // three projects rather than as nine chats.
   const list = $('#sessions');
   list.textContent = '';
 
+  const roots = new Map();
   for (const s of sessions) {
-    const li = el('li');
-    li.setAttribute('aria-current', String(s.id === state.sessionId));
-    li.appendChild(el('span', 'name', s.title || s.id));
+    if (!roots.has(s.root)) roots.set(s.root, []);
+    roots.get(s.root).push(s);
+  }
 
-    const sub = el('div', 'sub');
-    let status = `${s.turns} turn${s.turns === 1 ? '' : 's'}`;
-    if (s.busy) status = 'working…';
-    if (s.waiting_on) status = s.waiting_on === 'approval' ? 'needs approval' : 'asked you something';
-    sub.appendChild(el('span', '', status));
-    li.appendChild(sub);
+  for (const [root, group] of roots) {
+    const head = el('li', 'group');
+    head.appendChild(icon('folder'));
+    head.appendChild(el('span', '', basename(root)));
+    head.title = root;
+    list.appendChild(head);
 
-    li.onclick = () => selectSession(s.id);
-    list.appendChild(li);
+    for (const s of group) {
+      const li = el('li');
+      li.setAttribute('aria-current', String(s.id === state.sessionId));
+
+      let status = `${s.turns} turn${s.turns === 1 ? '' : 's'}`;
+      const dot = el('span', 'state');
+      if (s.busy) {
+        dot.classList.add('busy');
+        status = 'working';
+      }
+      if (s.waiting_on) {
+        dot.classList.add('waiting');
+        status = s.waiting_on === 'approval' ? 'needs approval' : 'asked you something';
+      }
+      // Colour is never the only carrier: the same thing is in the row's
+      // label, which is what a screen reader and a hover both get.
+      li.appendChild(dot);
+      li.appendChild(el('span', 'name', s.title || s.id));
+      li.appendChild(el('span', 'when', s.busy ? 'now' : ago(s.idle_for)));
+      li.title = `${status} · ${s.model}`;
+      li.setAttribute('aria-label', `${s.title || s.id} — ${status}`);
+
+      li.onclick = () => openSession(s);
+      list.appendChild(li);
+    }
   }
 }
 
+function basename(path) {
+  return String(path || '').replace(/\/+$/, '').split('/').pop() || String(path || '');
+}
+
+/* Put a session in the window: its name in the bar, its facts in the chips
+   under the composer, and its socket attached. */
+function openSession(summary) {
+  $('#session-title').textContent = summary.title || summary.id;
+  dressChips(summary);
+  selectSession(summary.id);
+}
+
+/* What the next thing you say will be run under: which folder, which model,
+   what it is allowed to do. Kept beside the box you type in, because that is
+   what all three of them qualify. */
+function dressChips(patch) {
+  state.info = { ...(state.info || {}), ...patch };
+  const info = state.info;
+
+  $('#mode-wrap').hidden = false;
+  if (info.policy) $('#mode').value = info.policy;
+
+  const root = $('#root-chip');
+  if (info.root) {
+    root.hidden = false;
+    root.querySelector('span').textContent = basename(info.root);
+    root.title = info.root;
+  }
+
+  const model = $('#model-chip');
+  if (info.model) {
+    model.hidden = false;
+    model.textContent = info.model;
+    model.title = `answering with ${info.model}`;
+  }
+  dressHero();
+}
+
 async function loadProviders() {
-  const res = await fetch('/api/providers');
-  if (!res.ok) return;
+  const res = await api('/api/providers');
+  if (!res || !res.ok) return;
   const data = await res.json();
   const box = $('#providers');
   box.textContent = '';
@@ -824,6 +1325,18 @@ async function loadProviders() {
   }
   if (!Object.keys(data.capabilities || {}).length) {
     box.appendChild(el('div', 'row', 'no providers configured'));
+  }
+
+  // Which provider is answering, next to which model is answering. The pair
+  // is one fact, and it belongs under the composer with the rest of them.
+  const chat = (data.capabilities || {}).chat || [];
+  const chip = $('#provider-chip');
+  if (chat.length) {
+    const info = (data.providers || []).find((p) => p.id === chat[0]);
+    chip.hidden = false;
+    chip.textContent = chat[0];
+    chip.title = info && info.local ? 'running on this machine' : 'a remote provider';
+    chip.classList.toggle('local', Boolean(info && info.local));
   }
 
   const select = $('#new-dialog select[name=provider]');
@@ -843,16 +1356,27 @@ function rememberSession(id) {
   try { localStorage.setItem(LAST_SESSION, id); } catch { /* private window */ }
 }
 
+function forgetSession() {
+  try { localStorage.removeItem(LAST_SESSION); } catch { /* private window */ }
+}
+
 function lastSession() {
   try { return localStorage.getItem(LAST_SESSION); } catch { return null; }
 }
 
 function selectSession(id) {
   if (id === state.sessionId) return;
-  transcript.textContent = '';
+  clearTranscript();
   state.tools.clear();
   state.seq = 0;
   state.turnNode = null;
+  state.turnStart = 0;
+  state.turnFiles = new Map();
+  // The diff stat counts what this client watched happen in one session, so
+  // moving to another one starts it again rather than carrying a total over.
+  state.added = 0;
+  state.removed = 0;
+  showDiffstat();
   // Held commands belong to the session they were typed for, not the next one.
   state.outbox = [];
   rememberSession(id);
@@ -867,20 +1391,21 @@ async function createSession(form) {
     provider: form.provider.value || null,
     mode: form.mode.value,
   };
-  const res = await fetch('/api/sessions', {
+  const res = await api('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  if (!res) {
+    notice('The daemon is not reachable.', 'error');
+    return;
+  }
   if (!res.ok) {
     notice((await res.json()).detail || 'could not create the session', 'error');
     return;
   }
   const session = await res.json();
-  $('#session-title').textContent = session.title;
-  $('#mode-wrap').hidden = false;
-  $('#mode').value = body.mode;
-  selectSession(session.id);
+  openSession({ ...session, policy: body.mode });
 }
 
 function wire() {
@@ -913,10 +1438,31 @@ function wire() {
 
   $('#stop').onclick = () => send({ type: 'turn.interrupt' });
 
-  $('#new-session').onclick = () => $('#new-dialog').showModal();
+  const newSession = () => $('#new-dialog').showModal();
+  $('#new-session').onclick = newSession;
+  $('#nav-new').onclick = newSession;
   $('#new-dialog').addEventListener('close', function () {
     if (this.returnValue === 'create') createSession(this.querySelector('form'));
   });
+
+  // Approval is a live control, not a label. Changing it takes effect from
+  // the next tool call — the one already in flight was decided under the old
+  // rule, and pretending otherwise would be a lie about what ran.
+  $('#mode').onchange = (e) => {
+    if (!state.sessionId) return;
+    send({ type: 'policy.set', mode: e.target.value });
+  };
+
+  // The provider list is long on a well-configured machine and irrelevant
+  // most of the time, so it starts folded.
+  $('#providers-toggle').onclick = function () {
+    const open = this.getAttribute('aria-expanded') !== 'true';
+    this.setAttribute('aria-expanded', String(open));
+    $('#providers').hidden = !open;
+  };
+
+  buildStarters();
+  settle();
 
   $('#voice-toggle').onclick = async () => {
     if (state.voice) {
@@ -927,7 +1473,8 @@ function wire() {
     try {
       await voice.start();
       state.voice = voice;
-      $('#voice-toggle').textContent = 'End voice';
+      $('#voice-toggle').classList.add('on');
+      $('#voice-toggle').title = 'End voice';
     } catch (err) {
       notice(`Voice could not start: ${err.message}`, 'error');
       voice.stop();
@@ -958,7 +1505,30 @@ function wire() {
 
 wire();
 wireMemory();
-companion.mount($('#perch'));
+wireRewind();
+
+/* The companion, everywhere it has something to say.
+ *
+ * One creature, one state, five places: the perch it lives on, the sidebar
+ * where it doubles as the app's own mark, the middle of an empty session,
+ * the composer where it says in words what it is doing, and the voice strip.
+ * Approval bars grow a sixth on demand. They are all driven from the same
+ * object, so the animal is never in two moods at once, and choosing a
+ * different one — or none — changes every one of them together. */
+companion.mount($('#perch'), { place: 'above' });
+companion.mount($('#brand-pet'), { place: 'below', scale: 2 });
+companion.attach($('#hero-pet'), { scale: 6 });
+companion.attach($('#buddy-pet'), { scale: 1 });
+companion.attach($('#voice-pet'), { scale: 1 });
+
+// The words half of the same signal, for anyone who would rather read it
+// than watch a moth — and for a screen reader, which cannot watch anything.
+companion.watch((what) => {
+  $('#buddy-state').textContent = caption(what);
+});
+
 loadProviders();
 loadSessions();
-setInterval(loadSessions, 5000);
+// Never allowed to throw: this poll is what notices the daemon coming back,
+// so it has to survive every second it is down.
+setInterval(() => loadSessions().catch(() => {}), 5000);

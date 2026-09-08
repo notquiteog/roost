@@ -1,17 +1,19 @@
 /* Roost. Two panes, no framework: this is served from the machine it runs on,
    so a build step would be a dependency with nothing to show for it.
 
-   The surface is glass — heavy blur, thin fills, hairline edges — and that is
-   a structural choice as much as a visual one. Everything on screen is a layer
-   over the same ground: the sidebar, the bar, each tool card. Depth is what
-   separates them, so nothing needs a heavy border or a hard fill, and a long
-   transcript of tool cards stays legible instead of turning into a wall of
-   boxes.
+   The shape is a desk, not a chat window: a quiet rail of sessions on the
+   left, one column of work in the middle, and every control that belongs to
+   the *next* thing you say gathered into the composer — approval, model,
+   voice, and the companion that tells you what is happening right now. A
+   setting that changes what the agent will do belongs where you type, not in
+   a title bar three hundred pixels away from it.
 
-   In the desktop shell the window itself is transparent, so the blur falls on
-   the real desktop. In a browser tab there is nothing behind the page, so the
-   same panels blur against the ground painted below — which is why that
-   background exists rather than being a flat colour. */
+   The surface is glass — blur, thin fills, hairline edges — and that is a
+   structural choice as much as a visual one. Everything on screen is a layer
+   over the same ground, so depth separates panels instead of borders, and a
+   long transcript stays legible instead of turning into a wall of boxes. In
+   the desktop shell the window itself is transparent, so the blur falls on
+   the real desktop; in a browser tab the ground painted below stands in. */
 
 :root {
   color-scheme: light dark;
@@ -26,61 +28,73 @@
      glassmorphism does. The common mistake is a thin fill over a light blur,
      which is see-through: you read the content behind and the panel stops
      being a surface. Vibrancy is the opposite — a *heavy* blur under a mostly
-     opaque fill, so what comes through is colour and light, not detail. You
-     can tell something is behind it; you cannot read it. */
-  --glass: rgba(252, 253, 255, 0.86);
-  --glass-strong: rgba(255, 255, 255, 0.93);
-  --glass-weak: rgba(250, 251, 255, 0.70);
-  --edge: rgba(255, 255, 255, 0.9);
-  --edge-soft: rgba(120, 130, 160, 0.16);
-  --blur: 60px;
-  --blur-heavy: 80px;
+     opaque fill, so what comes through is colour and light, not detail. */
+  --glass: rgba(252, 253, 255, 0.88);
+  --glass-strong: rgba(255, 255, 255, 0.95);
+  --glass-weak: rgba(250, 251, 255, 0.66);
+  --raise: rgba(255, 255, 255, 0.55);
+  --edge: rgba(120, 130, 160, 0.18);
+  --edge-soft: rgba(120, 130, 160, 0.11);
+  --hover: rgba(90, 105, 140, 0.09);
+  --blur: 40px;
 
-  --ink: #1a1d24;
-  --dim: #5d6474;
+  --ink: #16181f;
+  --dim: #5f6675;
+  --faint: #8b92a1;
   --accent: #3f6ad8;
   --ok: #1f7a4d;
-  --warn: #9a6a04;
+  --warn: #8a5d04;
   --danger: #c0392b;
 
-  --shadow: 0 8px 32px rgba(20, 26, 45, 0.10), 0 1px 2px rgba(20, 26, 45, 0.06);
-  --shadow-lift: 0 20px 60px rgba(20, 26, 45, 0.18);
+  /* The send button is the one solid thing in the composer: ink on light in
+     dark mode, light on ink here. It is the only control that commits. */
+  --solid: #1c1f27;
+  --on-solid: #ffffff;
+
+  --shadow: 0 6px 24px rgba(20, 26, 45, 0.08), 0 1px 2px rgba(20, 26, 45, 0.05);
+  --shadow-lift: 0 24px 70px rgba(20, 26, 45, 0.20);
 
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --radius: 14px;
   --radius-sm: 9px;
+  --column: 940px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0d0e12;
+    --bg: #0a0a0d;
     --bg-tint-a: #3a5db8;
     --bg-tint-b: #6d3f96;
     --bg-tint-c: #1f6b7d;
 
-    --glass: rgba(24, 26, 33, 0.88);
-    --glass-strong: rgba(30, 32, 41, 0.94);
-    --glass-weak: rgba(24, 26, 33, 0.72);
+    --glass: rgba(19, 19, 24, 0.90);
+    --glass-strong: rgba(26, 26, 33, 0.95);
+    --glass-weak: rgba(15, 15, 19, 0.74);
+    --raise: rgba(255, 255, 255, 0.035);
     --edge: rgba(255, 255, 255, 0.09);
     --edge-soft: rgba(255, 255, 255, 0.055);
+    --hover: rgba(255, 255, 255, 0.055);
 
-    --ink: #e9ecf4;
-    --dim: #949bad;
+    --ink: #ececf1;
+    --dim: #8d8d99;
+    --faint: #63636f;
     --accent: #8aa7f5;
     --ok: #5ac68e;
     --warn: #dfae52;
     --danger: #ef7365;
 
-    --shadow: 0 8px 32px rgba(0, 0, 0, 0.40), 0 1px 2px rgba(0, 0, 0, 0.30);
-    --shadow-lift: 0 24px 70px rgba(0, 0, 0, 0.55);
+    --solid: #f0f0f4;
+    --on-solid: #16161b;
+
+    --shadow: 0 6px 24px rgba(0, 0, 0, 0.36), 0 1px 2px rgba(0, 0, 0, 0.30);
+    --shadow-lift: 0 28px 80px rgba(0, 0, 0, 0.60);
   }
 }
 
 * { box-sizing: border-box; }
 
 /* `hidden` is a presentation hint with almost no specificity, so any rule that
-   sets `display` beats it. Several below do. Without this, the voice strip and
-   the approval selector are visible before there is anything to control. */
+   sets `display` beats it. Several below do. */
 [hidden] { display: none !important; }
 
 html, body { height: 100%; }
@@ -88,7 +102,7 @@ html, body { height: 100%; }
 body {
   margin: 0;
   display: grid;
-  grid-template-columns: 272px 1fr;
+  grid-template-columns: 264px 1fr;
   color: var(--ink);
   font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   background: var(--bg);
@@ -96,9 +110,7 @@ body {
 }
 
 /* The ground the glass blurs. Three wide, soft tints that drift very slowly —
-   slowly enough that it reads as depth rather than as animation. In the
-   desktop shell `body` is transparent instead and this is what falls away,
-   letting the real desktop through. */
+   slowly enough that it reads as depth rather than as animation. */
 body::before {
   content: '';
   position: fixed;
@@ -108,7 +120,7 @@ body::before {
     radial-gradient(38% 44% at 18% 22%, var(--bg-tint-a) 0%, transparent 62%),
     radial-gradient(34% 40% at 82% 18%, var(--bg-tint-b) 0%, transparent 60%),
     radial-gradient(44% 46% at 62% 88%, var(--bg-tint-c) 0%, transparent 64%);
-  opacity: .22;
+  opacity: .20;
   filter: blur(80px);
   animation: drift 44s ease-in-out infinite alternate;
 }
@@ -122,16 +134,19 @@ body::before {
    problem for anyone who gets sick from it. */
 @media (prefers-reduced-motion: reduce) {
   body::before { animation: none; }
-  * { transition: none !important; }
+  * { transition: none !important; animation: none !important; }
 }
 
 /* One mixin, applied everywhere glass is wanted. -webkit- included because
    WebKitGTK is what the Linux desktop shell renders in. */
-.glass,
-#sidebar, #bar, #composer, #voice-strip, .tool, .question, dialog, #sessions li[aria-current="true"] {
-  -webkit-backdrop-filter: blur(var(--blur)) saturate(200%);
-  backdrop-filter: blur(var(--blur)) saturate(200%);
+#sidebar, #bar, #field, #voice-strip, .tool.card, .question, .changed, dialog, .companion-menu {
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(180%);
+  backdrop-filter: blur(var(--blur)) saturate(180%);
 }
+
+.spacer { flex: 1; }
+.meta { color: var(--dim); font-size: 12px; }
+.ic { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 
 /* --- sidebar ------------------------------------------------------------ */
 
@@ -143,51 +158,78 @@ body::before {
   border-right: 1px solid var(--edge-soft);
 }
 
-#sidebar header {
+#brand {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--edge-soft);
+  gap: 9px;
+  padding: 8px 12px 6px;
+  min-height: 52px;
 }
-
-#sidebar h1 {
-  font-size: 15px; margin: 0; flex: 1;
+#brand h1 {
+  font-size: 14px; margin: 0; flex: 1;
   letter-spacing: -.01em; font-weight: 600;
 }
 
-#new-session {
-  width: 28px; height: 28px; padding: 0;
-  font-size: 18px; line-height: 1; border-radius: 9px;
-}
+#nav { display: flex; flex-direction: column; padding: 0 8px 6px; }
 
-#sessions { list-style: none; margin: 0; padding: 8px; overflow-y: auto; flex: 1; }
+.nav-row {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 7px 9px; text-align: left;
+  background: none; border: 1px solid transparent; box-shadow: none;
+  border-radius: var(--radius-sm); color: var(--dim); font-size: 13px;
+}
+.nav-row:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--ink); }
+.nav-row:disabled { opacity: .4; }
+
+#session-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-top: 6px; }
+
+.sec-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 17px; margin: 0;
+  font-size: 12px; color: var(--faint);
+  background: none; border: none; box-shadow: none; width: 100%;
+  text-align: left; border-radius: 0;
+}
+button.sec-head:hover { color: var(--dim); background: none; }
+.sec-head .chev { margin-left: auto; transition: transform .16s ease; display: inline-block; }
+.sec-head[aria-expanded="true"] .chev { transform: rotate(90deg); }
+
+#sessions { list-style: none; margin: 0; padding: 2px 8px 10px; overflow-y: auto; flex: 1; }
+
+#sessions .group {
+  display: flex; align-items: center; gap: 7px;
+  padding: 9px 9px 4px; color: var(--faint); font-size: 12px;
+}
+#sessions .group .ic { width: 13px; height: 13px; }
+#sessions .group span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 #sessions li {
-  padding: 9px 11px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  margin-bottom: 3px;
   border: 1px solid transparent;
-  transition: background .16s ease, border-color .16s ease;
+  transition: background .16s ease;
 }
-#sessions li:hover { background: var(--glass-weak); }
-#sessions li[aria-current="true"] {
-  background: var(--glass-strong);
-  border-color: var(--edge);
-  box-shadow: var(--shadow);
-}
-#sessions .name { font-weight: 500; display: block; }
-#sessions .sub { color: var(--dim); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+#sessions li:hover { background: var(--hover); }
+#sessions li[aria-current="true"] { background: var(--raise); border-color: var(--edge-soft); }
+#sessions .name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sessions .when { color: var(--faint); font-size: 11px; flex: none; }
+#sessions li[aria-current="true"] .name { font-weight: 500; }
 
-#providers {
-  border-top: 1px solid var(--edge-soft);
-  padding: 11px 16px;
-  font-size: 12px;
-  color: var(--dim);
-  max-height: 30vh;
-  overflow-y: auto;
+/* The state of a session, as one dot. Colour is never the only carrier — the
+   row's title attribute says the same thing in words. */
+#sessions .state {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: var(--faint); opacity: .45;
 }
+#sessions .state.busy { background: var(--accent); opacity: 1; animation: pulse 1.6s ease-in-out infinite; }
+#sessions .state.waiting { background: var(--warn); opacity: 1; }
+
+@keyframes pulse { 50% { opacity: .35; } }
+
+#foot { border-top: 1px solid var(--edge-soft); padding: 4px 0 8px; }
+#providers { padding: 2px 17px 6px; font-size: 12px; color: var(--dim); max-height: 26vh; overflow-y: auto; }
 #providers .row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
 #providers .local { color: var(--ok); }
 
@@ -195,81 +237,116 @@ body::before {
 
 main {
   display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  /* Slightly thinner than the chrome around it, so the window reads as
-     layered surfaces rather than one flat sheet — the content sits *under*
-     the bar and the composer, not beside them. */
+  /* Thinner than the chrome around it, so the window reads as layered
+     surfaces rather than one flat sheet. */
   background: var(--glass-weak);
-  -webkit-backdrop-filter: blur(var(--blur)) saturate(200%);
-  backdrop-filter: blur(var(--blur)) saturate(200%);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(180%);
+  backdrop-filter: blur(var(--blur)) saturate(180%);
 }
 
 #bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 11px 18px;
+  gap: 10px;
+  padding: 9px 16px;
   background: var(--glass);
   border-bottom: 1px solid var(--edge-soft);
 }
-#session-title { font-weight: 600; letter-spacing: -.01em; }
-#session-meta { color: var(--dim); font-size: 12px; font-family: var(--mono); }
-.spacer { flex: 1; }
-#mode-wrap { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+#session-title { font-weight: 600; font-size: 13px; letter-spacing: -.01em; }
+#session-meta { font-family: var(--mono); font-size: 11.5px; }
+
+.diffstat { font-family: var(--mono); font-size: 12px; }
+.diffstat .add { color: var(--ok); }
+.diffstat .del { color: var(--danger); }
 
 .pill {
   font-size: 11px; padding: 3px 9px; border-radius: 999px;
   border: 1px solid var(--edge-soft); text-transform: lowercase;
-  background: var(--glass-weak);
+  color: var(--dim);
 }
-.pill.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
-.pill.off { color: var(--dim); }
+.pill.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
 
-#transcript { flex: 1; overflow-y: auto; padding: 22px 18px 10px; min-height: 0; }
+/* The bottom padding is the companion's seat. The perch floats over the log
+   rather than taking a strip out of it — scroll up and the creature is over
+   the transcript, which is the point — but the *end* of the log is where the
+   eye is, so that much is left clear and the last card is never sat on. */
+#transcript { flex: 1; overflow-y: auto; padding: 20px 18px 92px; min-height: 0; }
+body.companion-off #transcript { padding-bottom: 10px; }
 
-.turn { max-width: 940px; margin: 0 auto 18px; }
+/* --- turns -------------------------------------------------------------- */
+
+.turn { max-width: var(--column); margin: 0 auto 16px; }
 .turn.user { display: flex; justify-content: flex-end; }
 .turn.user .body {
-  background: color-mix(in srgb, var(--accent) 26%, var(--glass-strong));
-  -webkit-backdrop-filter: blur(var(--blur)); backdrop-filter: blur(var(--blur));
-  border: 1px solid var(--edge);
-  padding: 9px 14px; border-radius: 16px; max-width: 74%;
-  white-space: pre-wrap; box-shadow: var(--shadow);
+  background: var(--raise);
+  border: 1px solid var(--edge-soft);
+  padding: 9px 14px; border-radius: 16px; max-width: 76%;
+  white-space: pre-wrap;
 }
-.turn.assistant .body { white-space: pre-wrap; }
+.turn.assistant .body { white-space: pre-wrap; font-size: 14.5px; line-height: 1.62; }
 
 .thinking {
-  color: var(--dim); font-style: italic; white-space: pre-wrap;
+  color: var(--dim); white-space: pre-wrap;
   border-left: 2px solid var(--edge-soft); padding-left: 11px; margin: 6px 0;
   font-size: 13px;
 }
-.thinking summary { cursor: pointer; font-style: normal; }
+.thinking summary { cursor: pointer; color: var(--faint); font-size: 12px; }
+
+/* How long the last turn took, on a rule across the column. The same beat a
+   transcript needs anyway: it says one piece of work ended here. */
+.worked {
+  display: flex; align-items: center; gap: 12px;
+  max-width: var(--column); margin: 20px auto 16px;
+  color: var(--faint); font-size: 11.5px;
+}
+.worked::before, .worked::after { content: ''; flex: 1; height: 1px; background: var(--edge-soft); }
 
 /* --- tool cards --------------------------------------------------------- */
 
+/* A finished read is a line of grey text; only what needs looking at gets to
+   be a card. A transcript of forty bordered boxes is unreadable, and most of
+   them are `read_file`. */
 .tool {
-  max-width: 940px; margin: 10px auto;
-  border: 1px solid var(--edge);
+  max-width: var(--column); margin: 2px auto;
+  border: 1px solid transparent;
   border-radius: var(--radius);
-  background: var(--glass);
   overflow: hidden;
+}
+.tool.card {
+  background: var(--glass);
+  border-color: var(--edge-soft);
+  margin: 10px auto;
   box-shadow: var(--shadow);
 }
 .tool > .head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 9px 13px; font-family: var(--mono); font-size: 12.5px;
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 11px; font-size: 12.5px; cursor: pointer; color: var(--dim);
 }
-.tool .name { font-weight: 600; }
-.tool .summary { flex: 1; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool.card > .head { padding: 9px 13px; }
+.tool > .head:hover { color: var(--ink); }
+.tool .verb { flex: none; }
+.tool .name { font-family: var(--mono); font-weight: 500; color: var(--ink); }
+.tool .summary {
+  flex: 1; min-width: 0; font-family: var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tool .took { flex: none; color: var(--faint); font-size: 11.5px; }
+.tool .chev { flex: none; color: var(--faint); transition: transform .16s ease; }
+.tool.open .chev { transform: rotate(90deg); }
+
+/* Everything under the head is the detail, and the detail is what folds. */
+.tool > .out, .tool > .diff, .tool > .shot { display: none; }
+.tool.open > .out, .tool.open > .diff, .tool.open > .shot { display: block; }
 
 .risk {
-  font-size: 10.5px; padding: 3px 8px; border-radius: 999px;
+  font-size: 10px; padding: 2px 7px; border-radius: 999px;
   text-transform: uppercase; letter-spacing: .05em;
-  font-family: -apple-system, system-ui, sans-serif; font-weight: 600;
-  border: 1px solid transparent;
+  font-weight: 600; border: 1px solid transparent; flex: none;
 }
-.risk.read { color: var(--dim); background: var(--glass-weak); border-color: var(--edge-soft); }
-.risk.write, .risk.network { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
-.risk.execute { color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.risk.read { display: none; }                 /* reading is the default; saying so is noise */
+.tool.card .risk.read { display: inline; color: var(--faint); border-color: var(--edge-soft); }
+.risk.write, .risk.network { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+.risk.execute { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .risk.destructive, .risk.purchase, .risk.credential { color: #fff; background: var(--danger); }
 
 .tool .out {
@@ -279,7 +356,7 @@ main {
   background: var(--glass-weak);
 }
 .tool .out.err { color: var(--danger); }
-.tool.failed { border-color: color-mix(in srgb, var(--danger) 45%, var(--edge)); }
+.tool.failed { border-color: color-mix(in srgb, var(--danger) 40%, var(--edge)); }
 .tool.denied { opacity: .6; }
 
 .diff {
@@ -288,21 +365,48 @@ main {
 }
 .diff .add { color: var(--ok); }
 .diff .del { color: var(--danger); }
-.diff .hunk { color: var(--dim); }
+.diff .hunk { color: var(--faint); }
+
+/* --- what changed ------------------------------------------------------- */
+
+/* The receipt for a turn: every file it touched, how much of each, and the
+   one button that puts them all back. */
+.changed {
+  max-width: var(--column); margin: 12px auto 16px;
+  border: 1px solid var(--edge-soft); border-radius: var(--radius);
+  background: var(--glass); overflow: hidden; box-shadow: var(--shadow);
+}
+.changed .top {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 13px; font-size: 13px;
+}
+.changed .top .what { flex: 1; font-weight: 500; }
+.changed .undo { padding: 3px 9px; font-size: 12px; }
+.changed .file {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 13px; border-top: 1px solid var(--edge-soft);
+  font-family: var(--mono); font-size: 12px;
+}
+.changed .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changed .add { color: var(--ok); }
+.changed .del { color: var(--danger); }
 
 /* --- decisions ---------------------------------------------------------- */
 
 .decide {
   display: flex; gap: 9px; align-items: center; flex-wrap: wrap;
-  padding: 11px 13px; border-top: 1px solid var(--edge-soft);
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  padding: 10px 13px; border-top: 1px solid var(--edge-soft);
+  background: color-mix(in srgb, var(--warn) 11%, transparent);
 }
+/* The companion leans in when it is stuck on you. Same creature, same state,
+   right next to the thing it is waiting for. */
+.decide .who { line-height: 0; flex: none; }
 .decide .why { flex: 1; color: var(--dim); font-size: 12.5px; }
 .decide label { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--dim); }
 
 .question {
-  max-width: 940px; margin: 10px auto; padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--edge));
+  max-width: var(--column); margin: 10px auto; padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--edge));
   border-radius: var(--radius); background: var(--glass);
   box-shadow: var(--shadow);
 }
@@ -311,67 +415,155 @@ main {
 .question form { display: flex; gap: 8px; }
 .question input { flex: 1; }
 
-.notice { max-width: 940px; margin: 8px auto; color: var(--dim); font-size: 12.5px; }
+.notice { max-width: var(--column); margin: 8px auto; color: var(--faint); font-size: 12.5px; }
 .notice.error { color: var(--danger); }
+
+/* --- the empty session --------------------------------------------------- */
+
+/* Nothing has happened yet, so the middle of the window is the companion, one
+   question, and the box you answer it in. */
+#hero { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 0 26px; }
+#hero-pet { line-height: 0; margin-bottom: 6px; }
+#hero h2 {
+  margin: 0; font-size: 25px; font-weight: 600; letter-spacing: -.02em; text-align: center;
+}
+#hero p { margin: 6px 0 0; }
+
+#starters {
+  max-width: 720px; margin: 6px auto 0; width: 100%; padding: 0 18px 22px;
+}
+.starter {
+  display: flex; align-items: center; gap: 11px; width: 100%;
+  padding: 11px 4px; text-align: left; font-size: 13.5px; color: var(--dim);
+  background: none; border: none; border-top: 1px solid var(--edge-soft);
+  border-radius: 0; box-shadow: none;
+}
+.starter:first-child { border-top: none; }
+.starter:hover { color: var(--ink); background: none; }
+.starter .ic { color: var(--faint); }
+
+body.blank main { justify-content: center; }
+body.blank #transcript { flex: 0 0 auto; overflow: visible; padding-bottom: 0; }
+body.blank #perch-rail { display: none; }
+body.blank #composer { border-top: none; background: transparent; }
 
 /* --- voice -------------------------------------------------------------- */
 
 #voice-strip {
   display: flex; align-items: center; gap: 10px;
-  padding: 9px 18px; border-top: 1px solid var(--edge-soft);
+  padding: 8px 18px; border-top: 1px solid var(--edge-soft);
   background: var(--glass); font-size: 13px;
 }
 #voice-partial { color: var(--dim); font-style: italic; }
-.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
-.dot.hearing { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 25%, transparent); }
-.dot.speaking { background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent); }
 
 /* --- composer ----------------------------------------------------------- */
 
+/* Everything about the next thing you say, in one box: what you are asking,
+   what it is allowed to do, which model answers, and what the companion is
+   doing about the last thing. */
 #composer {
-  display: flex; gap: 9px; align-items: flex-end;
-  padding: 14px 18px; border-top: 1px solid var(--edge-soft);
+  padding: 10px 18px 14px; border-top: 1px solid var(--edge-soft);
   background: var(--glass);
 }
+
+#field {
+  max-width: var(--column); margin: 0 auto;
+  border: 1px solid var(--edge); border-radius: 18px;
+  background: var(--glass-strong);
+  padding: 8px 8px 7px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+#field:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--edge));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
 #input {
-  flex: 1; resize: none; max-height: 40vh;
-  padding: 10px 13px; border-radius: var(--radius-sm);
-  border: 1px solid var(--edge);
-  background: var(--glass-weak); color: var(--ink);
-  font: inherit;
-  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  display: block; width: 100%; resize: none; max-height: 40vh;
+  padding: 7px 8px 6px; border: none; background: none; color: var(--ink);
+  font: inherit; line-height: 1.5;
 }
-#input:focus {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+#input:focus { outline: none; }
+#input::placeholder { color: var(--faint); }
+
+#controls { display: flex; align-items: center; gap: 6px; padding: 2px 2px 0; }
+
+#context-row {
+  display: flex; align-items: center; gap: 6px;
+  max-width: var(--column); margin: 7px auto 0; padding: 0 6px;
 }
+
+/* Chips: the small controls that live in and under the field. Quiet until
+   they are hovered, because none of them is the thing you came here to do. */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px; border-radius: 999px;
+  background: none; border: 1px solid transparent; box-shadow: none;
+  color: var(--dim); font-size: 12px; line-height: 1.4;
+  max-width: 260px; overflow: hidden;
+}
+.chip:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--ink); }
+.chip .ic { width: 13px; height: 13px; color: var(--faint); }
+.chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip.flat, span.chip { cursor: default; }
+.chip.flat:hover { background: none; color: var(--dim); }
+
+#mode-wrap select {
+  background: none; border: none; padding: 0; color: inherit;
+  font: inherit; cursor: pointer; -webkit-appearance: none; appearance: none;
+}
+#mode-wrap select:focus { outline: none; }
+#mode-wrap option { color: var(--ink); background: var(--glass-strong); }
+
+#model-chip, #provider-chip { font-family: var(--mono); font-size: 11.5px; }
+
+/* The one control that commits. */
+.round {
+  width: 30px; height: 30px; padding: 0; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: none;
+  background: var(--solid); color: var(--on-solid);
+}
+.round:hover:not(:disabled) { border: none; opacity: .88; }
+.round .ic { stroke-width: 1.7; width: 16px; height: 16px; }
+.round.danger { background: var(--danger); color: #fff; }
+.round .square { width: 9px; height: 9px; background: currentColor; border-radius: 2px; }
+
+button.icon {
+  width: 28px; height: 28px; padding: 0; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-sm); background: none; border: 1px solid transparent;
+  color: var(--dim); box-shadow: none;
+}
+button.icon:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--ink); }
+button.icon.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+/* --- ordinary controls --------------------------------------------------- */
 
 button, select, input[type=text], input:not([type]) {
   font: inherit; color: var(--ink);
-  background: var(--glass-strong);
+  background: var(--raise);
   border: 1px solid var(--edge);
-  border-radius: var(--radius-sm); padding: 7px 13px; cursor: pointer;
-  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
-  transition: background .15s ease, border-color .15s ease, transform .08s ease;
+  border-radius: var(--radius-sm); padding: 6px 12px; cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, opacity .15s ease;
 }
-button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
-button:active:not(:disabled) { transform: translateY(1px); }
+button:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--edge)); }
 button:disabled { opacity: .42; cursor: default; }
-button.primary, #send, #create-session {
-  background: var(--accent); border-color: transparent; color: #fff; font-weight: 500;
+button.primary, #create-session {
+  background: var(--solid); border-color: transparent; color: var(--on-solid); font-weight: 500;
 }
-button.ghost { background: var(--glass-weak); }
+button.ghost { background: none; }
 button.danger { background: var(--danger); border-color: transparent; color: #fff; }
 button.small { padding: 4px 10px; font-size: 12px; }
+:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 2px; }
 
 dialog {
-  border: 1px solid var(--edge); border-radius: 20px;
+  border: 1px solid var(--edge); border-radius: 18px;
   background: var(--glass-strong); color: var(--ink);
   padding: 24px; min-width: 440px;
   box-shadow: var(--shadow-lift);
 }
-dialog::backdrop { background: rgba(0, 0, 0, .32); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+dialog::backdrop { background: rgba(0, 0, 0, .40); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
 dialog h2 { margin: 0 0 15px; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
 dialog label { display: block; margin-bottom: 13px; font-size: 13px; color: var(--dim); }
 
@@ -385,8 +577,6 @@ dialog menu { display: flex; gap: 9px; justify-content: flex-end; margin: 18px 0
 
 /* --- memory -------------------------------------------------------------- */
 
-#open-memory { margin: 0 12px 12px; }
-
 #memory-dialog { min-width: 540px; max-width: 660px; }
 #memory-dialog .explain { color: var(--dim); font-size: 12.5px; margin: 0 0 15px; }
 #memory-dialog .spacer { flex: 1; }
@@ -399,10 +589,10 @@ dialog menu { display: flex; gap: 9px; justify-content: flex-end; margin: 18px 0
 #mem-list li {
   display: flex; gap: 9px; align-items: flex-start;
   padding: 8px 10px; border: 1px solid var(--edge-soft); border-radius: var(--radius-sm);
-  margin-bottom: 6px; font-size: 13px; background: var(--glass-weak);
+  margin-bottom: 6px; font-size: 13px; background: var(--raise);
 }
 #mem-list .text { flex: 1; }
-#mem-list .meta { color: var(--dim); font-size: 11px; font-family: var(--mono); }
+#mem-list .meta { color: var(--faint); font-size: 11px; font-family: var(--mono); }
 #mem-list .forget { padding: 2px 9px; font-size: 11px; }
 
 /* --- what the agent saw --------------------------------------------------- */
@@ -412,7 +602,7 @@ dialog menu { display: flex; gap: 9px; justify-content: flex-end; margin: 18px 0
   max-width: 100%; display: block; border-radius: 8px;
   border: 1px solid var(--edge-soft); cursor: zoom-in;
 }
-.tool .shot-meta { color: var(--dim); font-size: 11px; font-family: var(--mono); margin-top: 5px; }
+.tool .shot-meta { color: var(--faint); font-size: 11px; font-family: var(--mono); margin-top: 5px; }
 
 /* Where it clicked, on the frame it was looking at when it decided to. */
 .click-marker {
@@ -428,13 +618,13 @@ dialog menu { display: flex; gap: 9px; justify-content: flex-end; margin: 18px 0
 
 /* --- scrollbars, so they do not break the surface ------------------------- */
 
-::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  background: color-mix(in srgb, var(--ink) 16%, transparent);
   border-radius: 99px; border: 3px solid transparent; background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--ink) 30%, transparent); background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--ink) 28%, transparent); background-clip: content-box; }
 
 /* --- the desktop shell ---------------------------------------------------- */
 
@@ -448,68 +638,104 @@ body.native #bar,
 body.native #composer,
 body.native #voice-strip { background: var(--glass-weak); }
 
-@media (max-width: 720px) {
-  body { grid-template-columns: 1fr; }
-  #sidebar { display: none; }
-}
-
 /* --- companions ----------------------------------------------------------- */
 
 /* The rail has no height of its own, so the companion floats over the bottom
    of the transcript the way something sitting on the edge of a window would,
    and the log keeps every pixel it had. */
 #perch-rail { position: relative; height: 0; pointer-events: none; }
+#perch { position: absolute; right: 14px; bottom: -2px; pointer-events: auto; }
 
-#perch { position: absolute; right: 20px; bottom: 6px; pointer-events: auto; }
+#brand-pet, #hero-pet { position: relative; line-height: 0; }
+#brand-pet { flex: none; }
 
-#perch .pet {
+/* Every creature, at every size, is a button with nothing but art in it. */
+#perch .pet, #brand-pet .pet {
   padding: 0; border: none; background: none; box-shadow: none;
   line-height: 0; border-radius: var(--radius-sm); cursor: pointer;
-  -webkit-backdrop-filter: none; backdrop-filter: none;
 }
-#perch .pet:hover:not(:disabled) { border: none; }
-#perch .pet:active:not(:disabled) { transform: none; }
-#perch .pet:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
-  outline-offset: 4px;
-}
-#perch canvas { display: block; image-rendering: pixelated; }
-#perch .empty { display: none; }
+#perch .pet:hover:not(:disabled), #brand-pet .pet:hover:not(:disabled) { border: none; }
+#perch canvas, #brand-pet canvas, #hero-pet canvas, .mini canvas { display: block; image-rendering: pixelated; }
+#perch .empty, #brand-pet .empty { display: none; }
 
 /* Nobody on the perch. Enough of a mark to find and click, not enough to read
    as part of the interface — turning the companion off should look like
    turning it off, not like swapping it for a button. */
-#perch.off .pet canvas { display: none; }
-#perch.off .empty {
-  display: block; padding: 9px;
-  font-size: 18px; line-height: 1; color: var(--dim);
+#perch.off .pet canvas, #brand-pet.off .pet canvas { display: none; }
+#perch.off .empty, #brand-pet.off .empty {
+  display: block; padding: 8px;
+  font-size: 16px; line-height: 1; color: var(--dim);
   opacity: .28; transition: opacity .18s ease;
 }
-#perch.off .pet:hover .empty,
-#perch.off .pet:focus-visible .empty { opacity: .85; }
+#perch.off .pet:hover .empty, #perch.off .pet:focus-visible .empty,
+#brand-pet.off .pet:hover .empty { opacity: .85; }
+
+/* The thumbnail copies: composer, voice strip, approval bar. Same creature,
+   same state, drawn at one canvas pixel per sprite pixel so it sits in a line
+   of text the way an emoji would. The negative margin keeps a 22px stage from
+   making every chip it appears in taller than the rest. */
+.mini { display: inline-flex; align-items: center; line-height: 0; flex: none; }
+.mini canvas { margin: -4px 0; }
+#voice-strip .mini { margin-right: 2px; }
+
+/* With no companion chosen there is nothing to put in them, and an empty
+   20-pixel gap in a row of chips reads as a bug. */
+body.companion-off .mini, body.companion-off #hero-pet { display: none; }
+body.companion-off #buddy { padding-left: 4px; }
 
 .companion-menu {
-  position: absolute; right: 0; bottom: 100%; margin-bottom: 10px; z-index: 5;
-  min-width: 262px; padding: 5px;
+  position: absolute; z-index: 6;
+  min-width: 258px; padding: 5px;
+  /* The pickers hang off elements whose whole job is holding a canvas, and
+     those zero their line-height so the art has no baseline gap under it.
+     The menu is text, and inherits it otherwise — two lines on top of each
+     other, which is exactly as readable as it sounds. */
+  line-height: 1.45;
   background: var(--glass-strong);
-  -webkit-backdrop-filter: blur(var(--blur)) saturate(200%);
-  backdrop-filter: blur(var(--blur)) saturate(200%);
   border: 1px solid var(--edge); border-radius: var(--radius);
   box-shadow: var(--shadow-lift);
 }
+.companion-menu.above { right: 0; bottom: 100%; margin-bottom: 10px; }
+.companion-menu.below { left: 0; top: 100%; margin-top: 8px; }
 .companion-menu .row {
   display: flex; align-items: center; gap: 10px; width: 100%;
   padding: 6px 8px; text-align: left;
   background: none; border: 1px solid transparent; box-shadow: none;
   border-radius: var(--radius-sm);
 }
-.companion-menu .row:hover { background: var(--glass-weak); border-color: var(--edge-soft); }
+.companion-menu .row:hover { background: var(--hover); border-color: transparent; }
 .companion-menu .row[aria-current="true"] {
-  background: var(--glass-weak);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--raise);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
+.companion-menu canvas { image-rendering: pixelated; }
 /* The "nobody" row has no portrait, so its text is indented to where every
    other row's text starts rather than sliding left on its own. */
 .companion-menu .row.off .text { margin-left: 42px; }
 .companion-menu .name { font-size: 13px; font-weight: 500; }
 .companion-menu .blurb { font-size: 11.5px; color: var(--dim); }
+
+/* --- rewind --------------------------------------------------------------- */
+
+#rewind-dialog { min-width: 560px; max-width: 680px; }
+#rewind-dialog .explain { color: var(--dim); font-size: 12.5px; margin: 0 0 12px; }
+#rewind-dialog .explain.warn { color: var(--warn); }
+
+#rewind-list { list-style: none; margin: 14px 0 0; padding: 0; max-height: 46vh; overflow-y: auto; }
+#rewind-list li {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 10px 12px; border: 1px solid var(--edge-soft); border-radius: var(--radius-sm);
+  margin-bottom: 7px; font-size: 13px; background: var(--raise);
+}
+#rewind-list .what { flex: 1; min-width: 0; }
+#rewind-list .label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#rewind-list .files { color: var(--faint); font-size: 11px; font-family: var(--mono); margin-top: 3px; }
+#rewind-list .empty { color: var(--dim); justify-content: center; }
+
+/* --- narrow --------------------------------------------------------------- */
+
+@media (max-width: 760px) {
+  body { grid-template-columns: 1fr; }
+  #sidebar { display: none; }
+  #context-row { flex-wrap: wrap; }
+}

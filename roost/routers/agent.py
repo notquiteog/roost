@@ -88,6 +88,45 @@ async def list_sessions() -> dict[str, object]:
     return {'sessions': manager.list()}
 
 
+@http.get('/{session_id}/checkpoints')
+async def list_checkpoints(session_id: str) -> dict[str, object]:
+    session = manager.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail='no such session')
+    if session.checkpoints is None:
+        return {'enabled': False, 'checkpoints': []}
+    return {'enabled': True, 'checkpoints': session.checkpoints.describe()}
+
+
+class Restore(BaseModel):
+    checkpoint: str
+
+
+@http.post('/{session_id}/restore')
+async def restore_checkpoint(session_id: str, body: Restore) -> dict[str, object]:
+    session = manager.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail='no such session')
+    if session.checkpoints is None:
+        raise HTTPException(status_code=404, detail='checkpoints are not enabled')
+    if session.busy:
+        # Rewinding under a running turn would race the very writes it is
+        # trying to undo.
+        raise HTTPException(status_code=409, detail='the session is working — interrupt it first')
+
+    try:
+        report = session.checkpoints.restore(body.checkpoint)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {
+        'restored': report.restored,
+        'deleted': report.deleted,
+        'skipped': report.skipped,
+        'changed_since': report.changed_since,
+    }
+
+
 @http.delete('/{session_id}')
 async def close_session(session_id: str) -> dict[str, bool]:
     if not await manager.close(session_id):
@@ -116,7 +155,19 @@ async def agent_socket(
     agent = manager.get(session) if session else None
 
     if session and agent is None:
-        await ws.send_json({'type': 'error', 'message': f'no such session: {session}', 'retryable': False})
+        # Almost always a page that outlived the daemon: sessions live in
+        # memory, so restarting the daemon invalidates every id a client is
+        # holding. Said plainly, because "no such session" reads like data loss
+        # and is usually just a restart.
+        await ws.send_json({
+            'type': 'error',
+            'message': (
+                f'Session {session} is gone — the daemon has been restarted since this page '
+                'last connected. Sessions do not survive a restart. Pick another from the '
+                'sidebar, or start a new one.'
+            ),
+            'retryable': False,
+        })
         await ws.close(code=4404)
         return
 
@@ -162,6 +213,28 @@ async def agent_socket(
                 agent.deny(command.get('call_id', ''), command.get('reason', ''))
             elif kind == 'question.answer':
                 agent.answer(command.get('question_id', ''), command.get('answer', ''))
+            elif kind == 'policy.set':
+                # The approval mode is a live control, not a property of the
+                # session's birth: the thing you learn while watching an agent
+                # work is exactly how much you trust it. It takes effect from
+                # the next decision — a call already in flight was decided
+                # under the old rule, and re-deciding it retroactively would
+                # be a lie about what ran.
+                try:
+                    agent.policy.mode = Mode(command.get('mode', ''))
+                except ValueError:
+                    await ws.send_json({
+                        'type': 'error',
+                        'message': f'unknown approval mode: {command.get("mode")!r}',
+                        'retryable': False,
+                    })
+                else:
+                    log.info('session %s: approval mode set to %s', agent.id, agent.policy.mode.value)
+                    await ws.send_json({
+                        'type': 'policy.changed',
+                        'mode': agent.policy.mode.value,
+                        'policy': agent.policy.describe(),
+                    })
             elif kind == 'turn.interrupt':
                 agent.interrupt()
             elif kind == 'session.close':

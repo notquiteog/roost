@@ -31,6 +31,19 @@ async def lifespan(app: FastAPI):
     await bootstrap(config, registry)
     manager.start_reaper()
 
+    if config.mcp_enabled:
+        from roost.mcp.manager import load_config
+        from roost.mcp.manager import manager as mcp_manager
+
+        servers = load_config(config.mcp_config)
+        if servers:
+            failures = await mcp_manager.start(servers)
+            for name, why in failures.items():
+                log.warning('mcp %s did not start: %s', name, why)
+            live = len(mcp_manager.servers)
+            if live:
+                log.info('mcp: %d server(s), %d tool(s)', live, len(mcp_manager.tools()))
+
     if config.memory_enabled:
         from roost.memory.service import MemoryService
         from roost.memory.store import MemoryStore
@@ -49,6 +62,10 @@ async def lifespan(app: FastAPI):
 
     manager.stop_reaper()
     await manager.close_all()
+
+    from roost.mcp.manager import manager as mcp_manager
+
+    await mcp_manager.stop()
 
 
 app = FastAPI(title='Roost', version='0.1.0', lifespan=lifespan)
