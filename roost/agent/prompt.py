@@ -118,6 +118,16 @@ CAPABILITY_LINES = {
         'screenshot also tells you how big it is and whether it is your own screen or '
         'the one the person is looking at.'
     ),
+    'system': (
+        'You can install software and change system settings on this machine. Call '
+        '`system_info` first, always: the same instruction means different commands on '
+        'different systems, and on some of them the obvious one is wrong. It knows what '
+        'this machine is, what can install things here, and whether it can become root '
+        'without a person. `package_install` takes a plain name — "steam", "epic games '
+        'store" — and works out what that means here. Say what it is about to install and '
+        'where it comes from before you do it, especially when the answer is a different '
+        'program from the one they named, which on Linux it often is.'
+    ),
     'media': (
         'You can generate images and video. Ask `media_params` what the backend can be told '
         'before setting anything beyond a prompt.'

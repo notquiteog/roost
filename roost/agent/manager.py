@@ -121,6 +121,7 @@ class SessionManager:
             browser=browser,
             stage=stage,
             media=media,
+            system=cfg.system_tools_enabled,
             toolset=toolset,
         )
         self._sessions[session.id] = session

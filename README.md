@@ -157,6 +157,42 @@ reads a login wall as being logged out rather than as the site being broken.
 The same search backend is reachable directly, without a model in the way, for
 when you only wanted the links.
 
+**The machine itself.** "Install Steam" is not one instruction — it is
+`apt install steam-installer` on Debian, a flatpak where there is no native
+package, already-done on a Steam Deck, `winget install Valve.Steam` on
+Windows, and a cask on macOS. So the tools take a *name* and the platform
+decides what it means: `system_info` reports what this is and how it can
+elevate, and `package_install` routes accordingly. A derivative inherits its
+parent's route through `ID_LIKE`, so Pop!_OS gets Ubuntu's without being
+listed.
+
+Some answers are not the package you asked for. "Install the Epic Games
+Store" on Linux resolves to **Heroic**, because Epic ships no Linux client at
+all — and the recipe carries the instruction to say so before installing it,
+since someone who asked for Epic deserves to know they are getting a different
+program and why.
+
+Two failures it avoids by construction. A package manager asked to install
+something interactively stops at *"Do you want to continue? [Y/n]"* in a
+terminal nobody is reading, so every one of them is invoked non-interactively
+with stdin closed. And `sudo` on a machine that wants a password does not
+fail — it blocks forever on a prompt going nowhere — so the elevation route is
+worked out first and a system-wide install is *refused*, naming the per-user
+alternative, when there is no way to become root without a person.
+
+On an immutable system — SteamOS, Silverblue, anything ostree — the system
+package managers are present and will not work. The tool says so and points at
+flatpak, and says plainly not to disable the read-only root, because an agent
+that meets `apt` failing there will otherwise reach for `steamos-readonly
+disable`.
+
+**Display settings, honestly split.** `display_hdr` runs the command where the
+desktop has one — KDE exposes HDR through `kscreen-doctor` — and where it does
+not, which is most of them, it opens the right settings page and says what to
+click, for the desktop tools to finish. COSMIC's own `cosmic-randr` has no HDR
+subcommand; pretending there is a universal command is how an agent ends up
+inventing one, running it, and inventing another.
+
 **Images and video, tuned as far as you like.** The panel is drawn from what
 the backend says it has: ask A1111 and its own samplers, schedulers,
 upscalers and LoRA names come back as controls, with a sentence each. Nothing

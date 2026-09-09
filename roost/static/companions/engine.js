@@ -92,6 +92,14 @@ const TOOL_STATES = {
   // creatures, and the wait looks the same from outside either way.
   generate_image: 'running',
   generate_video: 'running',
+  system_info: 'reading',
+  display_info: 'reading',
+  package_search: 'browsing',
+  // Installing is a long wait on somebody else's servers and then a lot of
+  // unpacking, which is what 'running' already means here.
+  package_install: 'running',
+  package_remove: 'running',
+  display_hdr: 'desktop',
   media_params: 'reading',
   media_job: 'reading',
   import_workflow: 'writing',

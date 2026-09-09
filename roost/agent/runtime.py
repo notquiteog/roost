@@ -48,6 +48,8 @@ TOOLSETS: dict[str, tuple[str, ...]] = {
                 'browser_screenshot', 'browser_hand_over'),
     'desktop': ('desktop_screenshot', 'desktop_click', 'desktop_type', 'desktop_key',
                 'desktop_scroll'),
+    'system': ('system_info', 'package_search', 'package_install', 'package_remove',
+               'display_info', 'display_hdr'),
     'media': ('media_params', 'generate_image', 'generate_video', 'media_job', 'import_workflow'),
     'memory': ('remember', 'recall'),
 }
@@ -105,6 +107,12 @@ def mcp_tools(manager: Any) -> list[Tool]:
     return build(manager)
 
 
+def system_tools() -> list[Tool]:
+    from roost.agent.tools.system import system_tools as build
+
+    return build()
+
+
 def media_tools(service: Any) -> list[Tool]:
     from roost.agent.tools.media import media_tools as build
 
@@ -157,6 +165,7 @@ def build_session(
     browser: Any = None,
     stage: Any = None,
     media: Any = None,
+    system: bool = False,
     toolset: list[str] | None = None,
     mcp: Any = None,
     checkpoints: Any = None,
@@ -205,6 +214,8 @@ def build_session(
         chosen = [*chosen, *desktop_tools(stage)]
     if media is not None:
         chosen = [*chosen, *media_tools(media)]
+    if system:
+        chosen = [*chosen, *system_tools()]
     if mcp is not None:
         chosen = [*chosen, *mcp_tools(mcp)]
 
@@ -217,6 +228,7 @@ def build_session(
             ('browser', 'browser_navigate'),
             ('desktop', 'desktop_screenshot'),
             ('media', 'generate_image'),
+            ('system', 'system_info'),
             ('memory', 'recall'),
         )
         if marker in names

@@ -144,6 +144,14 @@ class Config:
     # dragged out from under someone is worse than a task that stopped.
     desktop_yield_to_user: bool = field(default_factory=lambda: _bool('ROOST_DESKTOP_YIELD', True))
 
+    # Installing software and changing system settings. On, because a harness
+    # that can drive a browser but cannot install the program someone asked
+    # for is oddly shaped — and every one of these calls is graded and
+    # confirmed like any other. A system-wide install grades `execute`,
+    # because a package's install scripts run as root; a per-user one grades
+    # `network`, because that is what it is.
+    system_tools_enabled: bool = field(default_factory=lambda: _bool('ROOST_SYSTEM', True))
+
     # --- generated media --------------------------------------------------
     media_dir: Path = field(
         default_factory=lambda: Path(os.getenv('ROOST_MEDIA_DIR', ''))

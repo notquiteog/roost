@@ -166,7 +166,7 @@ async def test_every_group_names_tools_that_exist():
     # These three are only present when their capability is attached, which a
     # plain session has none of.
     optional = set(TOOLSETS['browser']) | set(TOOLSETS['desktop']) | set(TOOLSETS['media'])
-    optional |= set(TOOLSETS['memory']) | set(TOOLSETS['web'])
+    optional |= set(TOOLSETS['memory']) | set(TOOLSETS['web']) | set(TOOLSETS['system'])
 
     for group, names in TOOLSETS.items():
         for name in names:
