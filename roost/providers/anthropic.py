@@ -76,6 +76,8 @@ class AnthropicProvider(ChatProvider):
         self.provider_id = provider_id
         self.timeout = timeout
         self.transport = transport or Transport(timeout=timeout)
+        # Output ceilings, per model. See _output_limit.
+        self._output_limits: dict[str, int] = {}
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -94,7 +96,10 @@ class AnthropicProvider(ChatProvider):
         payload: dict[str, Any] = {
             'model': req.model,
             'messages': messages,
-            'max_tokens': req.max_tokens,
+            # Required by this API -- there is no omitting it, so this is the
+            # one adapter that cannot express "no ceiling" by absence. It sends
+            # the model's own maximum, asked for once and remembered.
+            'max_tokens': req.max_tokens or await self._output_limit(req.model),
             'stream': True,
         }
         if req.system:
@@ -177,6 +182,46 @@ class AnthropicProvider(ChatProvider):
                         raise RuntimeError(f'anthropic: {(ev.get("error") or {}).get("message", "stream error")}')
 
         yield StreamDone(stop_reason=stop_reason, usage=usage)
+
+    #: Only used when the API will not say what a model's ceiling is.
+    #: Conservative on purpose: every current model accepts at least this,
+    #: so being wrong costs a shorter answer rather than a refused request.
+    #: A number ABOVE the real ceiling is a 400, which is a broken adapter
+    #: rather than a short answer -- so the fallback errs downwards.
+    _FALLBACK_MAX_OUTPUT = 8192
+
+    async def _output_limit(self, model: str) -> int:
+        """The model's own output ceiling, from ``GET /v1/models/{id}``.
+
+        ``max_tokens`` on that response is the OUTPUT cap and
+        ``max_input_tokens`` is the context window -- two different fields,
+        and reading the wrong one would ask for an output the size of the
+        whole window.
+
+        Remembered per model: a model's ceiling does not change, and a
+        lookup on every turn would put a round trip in front of every
+        reply.
+        """
+        cached = self._output_limits.get(model)
+        if cached is not None:
+            return cached
+        limit = self._FALLBACK_MAX_OUTPUT
+        try:
+            async with self.transport.session(10) as session:
+                async with session.get(
+                    f'{self.base_url}/models/{model}', headers=self._headers()
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.json()
+                        reported = body.get('max_tokens')
+                        if isinstance(reported, int) and reported > 0:
+                            limit = reported
+        except Exception:
+            # A capability lookup that fails is a reason to be conservative
+            # about length, never a reason to fail somebody's turn.
+            pass
+        self._output_limits[model] = limit
+        return limit
 
     async def models(self) -> list[dict[str, Any]]:
         async with self.transport.session(30) as session:

@@ -97,7 +97,20 @@ class ChatRequest:
     messages: list[Message]
     system: str | None = None
     tools: list[ToolSpec] = field(default_factory=list)
-    max_tokens: int = 4096
+    #: Ceiling on one response. **0 means no ceiling, and it is the default.**
+    #:
+    #: An agent turn is not a chat reply: it plans, calls tools, reads what
+    #: came back and writes a patch, and a ceiling picked in advance is a guess
+    #: about how long that takes. 4096 was that guess, and the way it failed is
+    #: the bad way — a truncated turn is a well-formed response with the stop
+    #: reason buried, so it reads as the model deciding to stop rather than as
+    #: an error anyone would go looking for.
+    #:
+    #: Uncapped is expressed by NOT SENDING the field, never by sending a large
+    #: number: a big number is still a ceiling and is wrong on the next model.
+    #: Each adapter omits its own. Anthropic is the exception — `max_tokens` is
+    #: required there — and asks that API for the model's own maximum instead.
+    max_tokens: int = 0
     temperature: float | None = None
     stop: list[str] = field(default_factory=list)
     # Provider-specific extras, passed through untouched. An escape hatch, and

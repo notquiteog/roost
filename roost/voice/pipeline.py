@@ -337,7 +337,11 @@ class VoiceSession:
             model=self.config.llm_model,
             messages=self.history,
             system=self.config.system_prompt,
-            max_tokens=1024,
+            # No ceiling. A spoken reply that stops mid-sentence is worse
+            # here than anywhere else in Roost: there is no scrollback and no
+            # stop reason to notice, just a voice that trails off. Length is
+            # the prompt's job, and the prompt already asks for short answers.
+
             # Reasoning is silence. A model that thinks for eight seconds
             # before its first word of content cannot be rescued by
             # synthesising a sentence at a time, because there is no sentence

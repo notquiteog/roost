@@ -155,12 +155,16 @@ class OpenAICompatProvider(ChatProvider, EmbeddingProvider, STTProvider, TTSProv
         payload: dict[str, Any] = {
             'model': req.model,
             'messages': _to_openai_messages(req.messages, req.system),
-            'max_tokens': req.max_tokens,
             'stream': True,
             # Ask for usage on the final chunk. Servers that do not know the
             # option ignore it; none of the ones tested reject it.
             'stream_options': {'include_usage': True},
         }
+        # Omitted entirely when uncapped, which is this API's own way of saying
+        # "up to the model's limit". A large stand-in would be a ceiling by
+        # another name, and the wrong one on most models.
+        if req.max_tokens:
+            payload['max_tokens'] = req.max_tokens
         if req.temperature is not None:
             payload['temperature'] = req.temperature
         if req.stop:
