@@ -10,6 +10,7 @@ so — only something that does not work.
 from __future__ import annotations
 
 import ast
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -191,16 +192,19 @@ def _exemption_for(lines: list[str], index: int) -> str | None:
     return None
 
 
-def _outbound_calls():
-    """(file, line, text, exemption) for everything that opens a socket.
+def _scan(root: Path):
+    """(file, line, text, exemption) for everything under `root` that opens a socket.
 
     Parsed rather than grepped. A regex over source text matches the words in
     a comment explaining why something cannot be done, or in a docstring
     describing the bug this guard exists to prevent — and a check that cries
     wolf is one that gets deleted rather than fixed. The syntax tree contains
     only what the file actually *does*.
+
+    Takes a root so the guard can be pointed at a known tree and checked, in
+    `test_the_guard_flags_exactly_what_it_should`. A checker nobody has run
+    against a planted fault is a checker nobody has tested.
     """
-    root = _package_root()
     scanned = 0
     for path in sorted(root.rglob('*.py')):
         source = path.read_text()
@@ -218,10 +222,100 @@ def _outbound_calls():
             rel = path.relative_to(root.parent)
             yield rel, node.lineno, lines[index].strip(), _exemption_for(lines, index)
 
-    assert scanned >= _MIN_FILES, (
-        f'only {scanned} python files were scanned, which is not this package — '
+    _scan.last_file_count = scanned
+
+
+def _outbound_calls():
+    """Everything in this package that opens a socket, with the scan checked."""
+    found = list(_scan(_package_root()))
+    assert _scan.last_file_count >= _MIN_FILES, (
+        f'only {_scan.last_file_count} python files were scanned, which is not this package — '
         'the guard is looking in the wrong place and would pass by having nothing to check'
     )
+    return found
+
+
+def test_the_guard_flags_exactly_what_it_should(tmp_path):
+    """Point the guard at a file whose every line has a known verdict.
+
+    The reason this exists rather than a hand-run check: half of a guard's
+    behaviour is what it must *not* flag, and "it did not flag the comment" is
+    indistinguishable from "the file was never read". A peer hit exactly that
+    one level up — a `sed` meant to plant a fault silently matched nothing, so
+    a pass meant nothing had been planted rather than nothing had been caught.
+
+    So the decoys and the real calls live in the *same file*. If the scan did
+    not read it, the expected offenders are missing and the test fails; if a
+    decoy trips, there is an extra one. Neither half can pass by absence.
+    """
+    (tmp_path / 'subject.py').write_text(
+        textwrap.dedent(
+            '''
+            """Module docstring mentioning aiohttp.ClientSession() in prose.
+
+            And httpx.AsyncClient() again, because this is exactly where the
+            words appear in the real package — in comments explaining the bug.
+            """
+            import aiohttp
+
+            TEMPLATE = """
+            import aiohttp
+            aiohttp.ClientSession()
+            """
+
+            # Never write requests.get('...') in this module.
+
+            def exempted():
+                # transport-exempt: reaches a thing that is not a model server,
+                # explained at length so the reason test is satisfied too.
+                return aiohttp.ClientSession()
+
+            def bare():
+                return aiohttp.ClientSession()
+            '''
+        ).lstrip()
+    )
+
+    found = list(_scan(tmp_path))
+    flagged = {number: exemption for _, number, _, exemption in found}
+
+    # Exactly two calls are real code. The docstring, the template string and
+    # the comment are not, and a scan that read the file at all must see the
+    # difference.
+    assert len(found) == 2, (
+        f'expected the two real calls and nothing else, got {sorted(flagged)} — '
+        'a decoy tripped, or the file was never read'
+    )
+
+    lines = (tmp_path / 'subject.py').read_text().splitlines()
+    exempted_line = next(i for i, ln in enumerate(lines, 1) if 'return aiohttp' in ln)
+    bare_line = next(i for i, ln in enumerate(lines, 1) if i > exempted_line and 'return aiohttp' in ln)
+
+    assert flagged[exempted_line], 'the exempted call should carry its reason'
+    assert flagged[bare_line] is None, 'the bare call should carry none'
+
+
+def test_an_exemption_does_not_reach_past_the_code_above_it(tmp_path):
+    """A comment attached to one thing must not excuse the next thing down."""
+    (tmp_path / 'subject.py').write_text(
+        textwrap.dedent(
+            '''
+            import aiohttp
+
+            # transport-exempt: this belongs to the helper directly below it and
+            # must not reach past the def line into the function after it.
+            def helper():
+                return None
+
+            def sneaky():
+                return aiohttp.ClientSession()
+            '''
+        ).lstrip()
+    )
+
+    found = list(_scan(tmp_path))
+    assert len(found) == 1
+    assert found[0][3] is None, 'the exemption reached past the code it was attached to'
 
 
 def test_the_guard_is_actually_looking_at_something():
