@@ -104,12 +104,12 @@ class RealtimeSession:
             # upgrade with a message about the model rather than the header.
             'OpenAI-Beta': 'realtime=v1',
         }
-        # The realtime API has no Tor option, and saying so is better than
-        # appearing to. It is one vendor's websocket, it cannot be pointed at
-        # local hardware, and a SOCKS-proxied websocket upgrade is a different
-        # code path from the request-shaped ones the transport covers. The
-        # pane tells the person both facts before they open it.
-        self._session = aiohttp.ClientSession()  # transport-exempt: no Tor option here
+        # transport-exempt: the realtime API has no Tor option, and saying so
+        # is better than appearing to. It is one vendor's websocket, it cannot
+        # be pointed at local hardware, and a SOCKS-proxied websocket upgrade
+        # is a different code path from the request-shaped calls the transport
+        # covers. The Live pane tells the person both facts before they open it.
+        self._session = aiohttp.ClientSession()
         try:
             self._ws = await self._session.ws_connect(url, headers=headers, heartbeat=20)
         except Exception as exc:

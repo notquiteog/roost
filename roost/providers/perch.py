@@ -76,15 +76,14 @@ async def probe(cfg: PerchConfig, timeout: float = 3.0) -> dict[str, bool]:  # n
 
     async def one(service: str) -> tuple[str, bool]:
         try:
-            # A Perch connection has no Tor toggle to honour: PerchConfig is
-            # its own shape rather than a stored Connection, so nothing here
-            # has ever promised to route through a proxy — and Perch is
-            # normally reached over an SSH tunnel to loopback, where there is
-            # nothing for Tor to hide. If that changes, this probe and the five
-            # providers built below all need a transport, not just one.
-            async with aiohttp.ClientSession(  # transport-exempt: no Tor option on Perch
-                timeout=aiohttp.ClientTimeout(total=timeout)
-            ) as session:
+            # transport-exempt: a Perch connection has no Tor toggle to
+            # honour. PerchConfig is its own shape rather than a stored
+            # Connection, so nothing here has ever promised to route through a
+            # proxy — and Perch is normally reached over an SSH tunnel to
+            # loopback, where there is nothing for Tor to hide. If that
+            # changes, this probe and all five providers built below need a
+            # transport, not just whichever one someone remembers.
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
                 async with session.get(f'{cfg.url(service)}/healthz') as resp:
                     if resp.status != 200:
                         return service, False

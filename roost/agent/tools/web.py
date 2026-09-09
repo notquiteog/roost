@@ -32,6 +32,25 @@ from roost.protocol.agent import Risk
 MAX_BYTES = 5_000_000
 TIMEOUT = 45
 
+
+def _session() -> aiohttp.ClientSession:
+    """A session for reading the open web.
+
+    Built here rather than taken from a provider's transport, and that is a
+    decision rather than an omission. A provider transport carries the routing
+    chosen for *a model server* — including whether that connection goes
+    through Tor. These tools reach whatever page the agent was asked to read,
+    which is a different destination on a different axis: sending someone's
+    browsing through the proxy their GPU happens to need would be applying one
+    connection's rule to another's traffic.
+
+    Roost has no "browse over Tor" option today. If one is added it belongs
+    here, as its own setting, and not by borrowing a model connection's.
+    """
+    # transport-exempt: the open web is not a model server, and a model
+    # connection's proxy setting must not silently become the browser's.
+    return aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=TIMEOUT))
+
 # Whole elements whose text is never page content.
 _DROP = re.compile(
     r'<(script|style|noscript|template|svg|head)\b[^>]*>.*?</\1>', re.I | re.S
@@ -119,9 +138,8 @@ class WebFetchTool(Tool):
                 'reach services that are not exposed to the internet. Refused.'
             )
 
-        timeout = aiohttp.ClientTimeout(total=TIMEOUT)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with _session() as session:
                 async with session.get(
                     url,
                     headers={'User-Agent': 'Roost/0.1 (+https://github.com/notquiteog/roost)'},
@@ -226,8 +244,7 @@ class WebSearchTool(Tool):
 
     async def _json(self, url: str, *, headers: dict | None = None, params: dict | None = None,
                     json_body: dict | None = None) -> Any:
-        timeout = aiohttp.ClientTimeout(total=TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with _session() as session:
             method = session.post if json_body else session.get
             kwargs: dict[str, Any] = {'headers': headers or {}}
             if params:
@@ -287,8 +304,7 @@ class WebSearchTool(Tool):
         returns nothing teaches a model that the web is empty — it stops
         searching and starts guessing, which is worse than an error.
         """
-        timeout = aiohttp.ClientTimeout(total=TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with _session() as session:
             async with session.post(
                 'https://html.duckduckgo.com/html/',
                 data={'q': query},

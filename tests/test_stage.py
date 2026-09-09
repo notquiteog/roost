@@ -9,7 +9,14 @@ from __future__ import annotations
 
 import pytest
 
-from roost.agent.stage import Monitor, Rect, StageUnavailable, _parse_size, pick_monitor
+from roost.agent.stage import (
+    Monitor,
+    Rect,
+    StageUnavailable,
+    _lock_is_stale,
+    _parse_size,
+    pick_monitor,
+)
 
 
 def test_a_point_is_measured_from_the_picture_the_model_was_shown():
@@ -79,3 +86,89 @@ def test_being_unable_to_enumerate_is_an_error_not_a_free_pass(monkeypatch):
     monkeypatch.setattr('roost.agent.stage.monitors', lambda display='': [])
     with pytest.raises(StageUnavailable, match='could not be enumerated'):
         pick_monitor('1')
+
+
+# -- not leaving X servers behind -------------------------------------------
+
+
+def test_a_lock_naming_a_dead_process_is_reclaimed(tmp_path):
+    """X leaves `/tmp/.X<n>-lock` behind when it is killed rather than asked to
+    stop. Treating that as occupied forever means the display range fills up
+    and never empties — and the failure arrives as "no free X display number",
+    which sounds like a hard limit rather than litter.
+    """
+    import os
+
+    alive = tmp_path / 'alive-lock'
+    alive.write_text(f'{os.getpid():>10}\n')
+    assert _lock_is_stale(alive) is False
+
+    # A pid that cannot be running: this process would have to have forked
+    # four million times.
+    dead = tmp_path / 'dead-lock'
+    dead.write_text('   4000000\n')
+    assert _lock_is_stale(dead) is True
+
+
+@pytest.mark.parametrize('contents', ['', 'not a pid', '   '])
+def test_an_unreadable_lock_is_left_alone(tmp_path, contents):
+    """Occupied is the safe reading of a lock nobody can parse: stealing a
+    display from a running server is worse than skipping a free one."""
+    lock = tmp_path / 'odd-lock'
+    lock.write_text(contents)
+    assert _lock_is_stale(lock) is False
+
+
+def test_a_virtual_stage_does_not_outlive_its_owner():
+    """Measured while building this: a hundred and one orphaned Xvfb
+    processes, every one from a run that was killed before `close()` could
+    run. `close()` handles the ordinary case; this handles the rest.
+    """
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import textwrap
+    import time
+
+    if not shutil.which('Xvfb'):
+        pytest.skip('Xvfb is not installed')
+
+    # A child that makes a stage, says which, and then never cleans up.
+    script = textwrap.dedent("""
+        import sys, time, warnings
+        warnings.filterwarnings('ignore')
+        from roost.agent.stage import VirtualStage
+        stage = VirtualStage(320, 240)
+        print(stage._proc.pid, flush=True)
+        time.sleep(60)
+    """)
+    child = subprocess.Popen(
+        [sys.executable, '-u', '-c', script],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        first = child.stdout.readline().strip()
+        if not first.isdigit():
+            # Kept rather than discarded: a child that could not start a stage
+            # is the interesting case, and swallowing its stderr turns that
+            # into an unexplained ValueError on the next line.
+            child.kill()
+            why = child.stderr.read()[-500:] if child.stderr else ''
+            pytest.skip(f'the child could not start a stage: {why.strip() or first!r}')
+        xvfb = int(first)
+        os.kill(xvfb, 0)                    # it is running
+    finally:
+        child.kill()
+        child.wait(timeout=10)
+
+    # The owner died without cleaning up. The X server must not survive it.
+    for _ in range(50):
+        try:
+            os.kill(xvfb, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+
+    os.kill(xvfb, 9)
+    pytest.fail(f'Xvfb {xvfb} outlived the process that started it')

@@ -52,11 +52,17 @@ class Transport:
         """A session for one call. Closed by the caller, as `async with`."""
         total = float(timeout or self.timeout)
         if not self.tor:
+            # transport-exempt: this module *is* the transport — the one place
+            # a session is meant to be constructed, and what every adapter is
+            # required to come through instead of doing this itself.
             return aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=total))
 
         proxy = self.proxy
         assert proxy is not None
         total = tor_mod.timeout_for(total)
+        # transport-exempt: the same, for the proxied case. If a call ever
+        # needs a session that is not built here, that is the bug the guard in
+        # tests/test_tor.py exists to catch.
         return aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=total),
             connector=tor_mod.connector(proxy, timeout=total),

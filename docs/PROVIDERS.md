@@ -144,12 +144,25 @@ let the tick box on another connection imply otherwise:
   local hardware in the first place. The Live pane says both things before you
   open it.
 
-Everything else goes through one transport, and a test greps for any adapter
-that builds its own HTTP session, because that is what the failure looks like:
-`OllamaProvider` accepted a transport and used it nowhere, so a connection
-with Tor on registered, probed, showed a "tor" tag — and sent every message
-straight out. A line marked `# transport-exempt: <why>` is how a genuine
-exception says so.
+* **The open web.** `web_search` and `web_fetch` reach whatever page the
+  agent was asked to read, which is a different destination on a different
+  axis. Sending someone's browsing through the proxy their GPU happens to need
+  would be applying one connection's rule to another's traffic. There is no
+  "browse over Tor" option today; if one is added it belongs to the web tools
+  as its own setting, not borrowed from a model connection.
+
+Everything else goes through one transport, and a test greps the whole package
+for anything that opens a connection without one — not just the adapters,
+because the other shape of this bug is a call that never went near an adapter
+at all: an evaluation helper, a health check, a token counter, reaching a model
+server on a bare client.
+
+That test exists because the failure was live. `OllamaProvider` accepted a
+transport and used it nowhere, so a connection with Tor on registered, probed,
+showed a "tor" tag — and sent every message straight out. A line or comment
+block marked `# transport-exempt: <why>` is how a genuine exception says so,
+and a second test refuses a reason too short to review: an exemption nobody
+can check is one the next reader assumes was load-bearing.
 
 ## Choosing a model
 

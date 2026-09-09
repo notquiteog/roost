@@ -535,23 +535,46 @@ class VirtualStage(XStage):
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            # Die with the daemon. `close()` handles the ordinary case, but a
+            # crash, a SIGKILL or a test run cut off by a timeout does not
+            # reach it — and an X server nobody owns runs until the machine is
+            # rebooted. Measured while building this: a hundred and one of
+            # them, which is also what filled the display range and turned the
+            # next stage into "no free X display number", an error that sounds
+            # like a hard limit rather than litter.
+            preexec_fn=_die_with_parent,  # noqa: PLW1509 - the point is to run in the child
         )
 
-        # Wait for the socket rather than sleeping a fixed amount: on a loaded
-        # machine a fixed sleep is either too short to work or too long to
-        # tolerate, and the socket appearing is the actual event.
-        socket = Path(f'/tmp/.X11-unix/X{self.display_number}')
-        deadline = time.monotonic() + 10
+        # Wait until the display can actually be *opened*, rather than
+        # sleeping a fixed amount or waiting for the socket file.
+        #
+        # A fixed sleep is either too short to work or too long to tolerate.
+        # The socket looks like the right event and is not: it appears when
+        # Xvfb binds, which is before it is answering, so on a loaded machine
+        # the connection that follows fails with "cannot open the X display"
+        # — a message that reads as a missing X server rather than as an
+        # impatient client. Opening it *is* the readiness condition, so that
+        # is what is tested.
+        deadline = time.monotonic() + 15
+        last: Exception | None = None
         while time.monotonic() < deadline:
-            if socket.exists():
-                break
             if self._proc.poll() is not None:
                 err = (self._proc.stderr.read() or b'').decode('utf-8', 'replace')[:400]
                 raise StageUnavailable(f'Xvfb exited immediately: {err}')
-            time.sleep(0.05)
+            try:
+                probe = _X11(display)
+            except StageUnavailable as exc:
+                last = exc
+                time.sleep(0.05)
+                continue
+            probe.close()
+            break
         else:
             self._proc.kill()
-            raise StageUnavailable(f'Xvfb did not come up on {display} within 10s')
+            raise StageUnavailable(
+                f'Xvfb came up on {display} but would not accept a connection within 15s'
+                + (f': {last}' if last else '')
+            )
 
         super().__init__(display, region=Rect(0, 0, width, height), kind='virtual',
                          shares_pointer=False, yield_to_user=False)
@@ -568,6 +591,46 @@ class VirtualStage(XStage):
         shutil.rmtree(self._xauth.parent, ignore_errors=True)
 
 
+def _die_with_parent() -> None:
+    """Ask the kernel to signal this child when its parent dies.
+
+    Runs between fork and exec, in the child. Linux only; everywhere else
+    there is no equivalent and `close()` is the only cleanup there is.
+    """
+    import ctypes
+    import signal
+
+    PR_SET_PDEATHSIG = 1
+    try:
+        ctypes.CDLL('libc.so.6', use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
+    except OSError:
+        # Not fatal: it only means an orphan is possible, which is the state
+        # everything was in before this existed.
+        pass
+
+
+def _lock_is_stale(lock: Path) -> bool:
+    """Whether an X lock file names a process that is no longer there.
+
+    X servers leave `/tmp/.X<n>-lock` behind when they are killed rather than
+    asked to stop, and a lock treated as occupied forever means the display
+    range fills up and never empties — on a machine that has run a few hundred
+    sessions and had some of them crash, nothing can start a stage again. The
+    file holds the pid, space-padded.
+    """
+    try:
+        pid = int(lock.read_text().strip())
+    except (OSError, ValueError):
+        return False        # unreadable or malformed: treat it as occupied
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False        # somebody else's process, but a live one
+    return False
+
+
 def _free_display() -> int:
     """A display number nothing is using.
 
@@ -581,10 +644,27 @@ def _free_display() -> int:
         for entry in sockets.iterdir():
             if entry.name.startswith('X') and entry.name[1:].isdigit():
                 used.add(int(entry.name[1:]))
+
+    stale = 0
     for candidate in range(90, 200):
-        if candidate not in used and not Path(f'/tmp/.X{candidate}-lock').exists():
+        lock = Path(f'/tmp/.X{candidate}-lock')
+        if lock.exists():
+            if not _lock_is_stale(lock):
+                continue
+            # The socket is left alone: X removes it on start, and deleting
+            # one belonging to a server that is merely slow to answer would
+            # break it. Only the lock is reclaimed.
+            stale += 1
+            log.info('reclaiming display :%d — its lock names a process that is gone', candidate)
             return candidate
-    raise StageUnavailable('no free X display number between :90 and :200')
+        if candidate not in used:
+            return candidate
+
+    raise StageUnavailable(
+        'every display from :90 to :200 is in use. That is a hundred and ten X servers, '
+        'so something is leaking them — look for orphaned Xvfb processes '
+        '(`pgrep -a Xvfb`) rather than raising the range.'
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,9 @@ so — only something that does not work.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from roost.net import tor
@@ -109,7 +112,59 @@ def test_a_tor_transport_says_where_it_goes():
 # -- every adapter actually uses the transport it was given ------------------
 
 
-def test_no_adapter_builds_its_own_http_session():
+# Every way this codebase has of opening an outbound connection. Wider than
+# aiohttp on purpose: the guard is worth nothing if adding `httpx` to reach a
+# model server is the way around it.
+_OPENS_A_CONNECTION = re.compile(
+    r'aiohttp\.ClientSession\s*\(|aiohttp\.request\s*\(|'
+    r'\bhttpx\.(?:Client|AsyncClient|get|post|put|delete|request)\s*\(|'
+    r'\brequests\.(?:get|post|put|delete|request|Session)\s*\(|'
+    r'\burlopen\s*\('
+)
+
+_EXEMPT = 'transport-exempt:'
+
+# An exemption nobody can review is one the next reader assumes was
+# load-bearing. Short enough to write in passing, long enough to be a reason.
+_MIN_REASON = 25
+
+
+def _exemption_for(lines: list[str], index: int) -> str | None:
+    """The exemption covering the call on `lines[index]`, if there is one.
+
+    Looked for on the line itself and then in the contiguous comment block
+    directly above it, stopping at the first line that is not a comment. The
+    block matters: every reason worth writing here ran to three or four
+    sentences, and a rule that forces those onto one line is a rule that
+    produces worse reasons. Stopping at the first non-comment line is what
+    keeps a comment attached to something else from exempting a call below it.
+    """
+    candidates = [lines[index]]
+    for above in range(index - 1, -1, -1):
+        stripped = lines[above].strip()
+        if not stripped.startswith('#'):
+            break
+        candidates.append(stripped)
+
+    for line in candidates:
+        if _EXEMPT in line:
+            return line.split(_EXEMPT, 1)[1].strip()
+    return None
+
+
+def _outbound_calls():
+    """(file, line number, text, exemption) for everything that opens a socket."""
+    root = Path(__file__).resolve().parent.parent / 'roost'
+    for path in sorted(root.rglob('*.py')):
+        lines = path.read_text().splitlines()
+        for index, line in enumerate(lines):
+            if not _OPENS_A_CONNECTION.search(line):
+                continue
+            rel = path.relative_to(root.parent)
+            yield rel, index + 1, line.strip(), _exemption_for(lines, index)
+
+
+def test_nothing_opens_its_own_connection_without_saying_why():
     """The bug this exists to prevent was live.
 
     `OllamaProvider` accepted a transport and then built its own
@@ -121,26 +176,35 @@ def test_no_adapter_builds_its_own_http_session():
 
     A grep, deliberately, rather than a mock: the failure is a *line of code*
     that bypasses the transport, and the only reliable way to catch the next
-    one is to look for it. Where a session genuinely has to be built by hand,
-    mark the line `# transport-exempt: <why>` — a marker of its own rather
-    than ruff's `noqa`, which means something else and warns when borrowed.
+    one is to look for it. It covers the whole package rather than the
+    adapters, because the other shape of this bug is a call that never went
+    near an adapter at all — an evaluation helper, a health check, a token
+    counter — reaching a model server on a bare client.
     """
-    import re
-    from pathlib import Path
-
-    providers = Path(__file__).resolve().parent.parent / 'roost' / 'providers'
-    building = re.compile(r'aiohttp\.ClientSession\s*\(')
-
-    offenders = []
-    for path in sorted(providers.glob('*.py')):
-        for number, line in enumerate(path.read_text().splitlines(), start=1):
-            if not building.search(line) or '# transport-exempt:' in line:
-                continue
-            offenders.append(f'{path.name}:{number}: {line.strip()}')
-
+    offenders = [
+        f'{path}:{number}: {text}'
+        for path, number, text, exemption in _outbound_calls()
+        if exemption is None
+    ]
     assert not offenders, (
-        'these build their own HTTP session instead of using self.transport, '
-        'so a connection routed through Tor would not be:\n  ' + '\n  '.join(offenders)
+        'these open a connection without going through a transport and without '
+        'saying why. If it reaches a model server, use self.transport. If it '
+        'genuinely must not, mark it `# transport-exempt: <reason>`:\n  '
+        + '\n  '.join(offenders)
+    )
+
+
+def test_an_exemption_gives_a_reason_worth_reading():
+    """A marker with nothing after it is a silenced check, not a decision."""
+    thin = [
+        f'{path}:{number}: {exemption!r}'
+        for path, number, _, exemption in _outbound_calls()
+        if exemption is not None and len(exemption) < _MIN_REASON
+    ]
+    assert not thin, (
+        'these exemptions are too short to review — say what this reaches and '
+        f'why a transport would be wrong for it (at least {_MIN_REASON} '
+        'characters):\n  ' + '\n  '.join(thin)
     )
 
 
