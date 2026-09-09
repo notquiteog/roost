@@ -301,8 +301,15 @@ async def test_a_refused_purchase_is_terminal_not_a_detour():
 
 @pytest.mark.asyncio
 async def test_a_purchase_is_confirmed_even_in_unrestricted_mode():
-    """`unrestricted` means stop asking about this machine. It is not consent
-    to spend money, and the two must not be bought with one click."""
+    """`unrestricted` means stop asking about this machine. It has never meant
+    consent to spend money, and there is no setting that makes it mean that.
+
+    Purchases are *possible* by default now — a harness meant to finish a real
+    task has to be able to reach the end of one — but `allow_purchases`
+    decides whether spending can happen at all, not whether it happens
+    unasked. A flag that skipped the prompt is one somebody sets during a demo
+    and still has set six months later.
+    """
     from roost.agent.approval import ApprovalPolicy, Decision, Mode
     from roost.protocol.agent import ToolCall
 
@@ -311,8 +318,11 @@ async def test_a_purchase_is_confirmed_even_in_unrestricted_mode():
     yolo = ApprovalPolicy(mode=Mode.UNRESTRICTED)
     assert yolo.decide(call)[0] is Decision.ASK
 
-    with_money = ApprovalPolicy(mode=Mode.UNRESTRICTED, allow_purchases=True)
-    assert with_money.decide(call)[0] is Decision.ALLOW
+    explicitly_on = ApprovalPolicy(mode=Mode.UNRESTRICTED, allow_purchases=True)
+    assert explicitly_on.decide(call)[0] is Decision.ASK, 'no setting skips the prompt'
+
+    off = ApprovalPolicy(mode=Mode.UNRESTRICTED, allow_purchases=False)
+    assert off.decide(call)[0] is Decision.DENY, 'off should refuse, not prompt'
 
     # And a one-off approval is never remembered for a purchase.
     yolo.remember(call)
@@ -320,15 +330,26 @@ async def test_a_purchase_is_confirmed_even_in_unrestricted_mode():
 
 
 @pytest.mark.asyncio
-async def test_credentials_are_refused_rather_than_asked():
-    """An approval prompt would still mean the agent had the secret. Better
-    that it never sees it."""
+async def test_a_secret_is_confirmed_and_never_printed():
+    """Typing a password is allowed now, and asked about every time.
+
+    This used to be a flat refusal, on the reasoning that an approval prompt
+    still meant the agent held the secret. The capability was wanted, so the
+    protection moved rather than disappearing: the value stays out of the
+    prompt, out of the tool result and out of the page read — see
+    tests/test_money_and_secrets.py, which proves that against a real browser.
+    """
     from roost.agent.approval import ApprovalPolicy, Decision, Mode
     from roost.protocol.agent import ToolCall
 
     call = ToolCall(id='c', name='browser_type', risk=Risk.CREDENTIAL, summary='type into a password field')
-    assert ApprovalPolicy(mode=Mode.UNRESTRICTED).decide(call)[0] is Decision.DENY
-    assert ApprovalPolicy(mode=Mode.UNRESTRICTED, allow_credentials=True).decide(call)[0] is not Decision.DENY
+    assert ApprovalPolicy(mode=Mode.UNRESTRICTED).decide(call)[0] is Decision.ASK
+    assert ApprovalPolicy(mode=Mode.UNRESTRICTED, allow_credentials=False).decide(call)[0] is Decision.DENY
+
+    # Never remembered: "don't ask again" about a secret is not an answer.
+    policy = ApprovalPolicy(mode=Mode.TRUSTED)
+    policy.remember(call)
+    assert policy.decide(call)[0] is Decision.ASK
 
 
 @pytest.mark.asyncio

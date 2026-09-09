@@ -138,8 +138,10 @@ def _render(elements: list[dict[str, Any]]) -> str:
             bits.append('checked')
         if e.get('disabled'):
             bits.append('DISABLED')
-        if (e.get('type') or '') == 'password':
-            bits.append('(password — you cannot type here)')
+        if e.get('secret') or (e.get('type') or '') == 'password':
+            # The value is not shown and never will be. Typing here is
+            # possible and always confirmed with the person first.
+            bits.append('(holds a secret — its value is hidden, and typing here is confirmed)')
         lines.append('  '.join(bits))
     return '\n'.join(lines)
 
@@ -281,6 +283,7 @@ class BrowserClickTool(_BrowserTool):
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
         page = await self.browser.page()
+
         try:
             locator = await self.browser.find(args['ref'])
             await locator.scroll_into_view_if_needed(timeout=5000)
@@ -302,9 +305,12 @@ class BrowserClickTool(_BrowserTool):
 class BrowserTypeTool(_BrowserTool):
     name = 'browser_type'
     description = (
-        'Type into a field by the number browser_read gave it. '
-        'You cannot type into password or payment fields — those are handed to the person. '
-        'Set submit to press Enter afterwards.'
+        'Type into a field by the number browser_read gave it. Set submit to press Enter '
+        'afterwards. Passwords, card numbers and one-time codes can be typed and are '
+        'confirmed with the person first; their value is never echoed back to you or '
+        'written to the transcript. Only type a secret the person gave you for this — and '
+        'where they are at the keyboard, browser_hand_over is better, because a value you '
+        'never receive cannot leak.'
     )
     input_schema = {
         'type': 'object',
@@ -339,6 +345,16 @@ class BrowserTypeTool(_BrowserTool):
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
         page = await self.browser.page()
+
+        # Whether this field holds a secret, decided the same way the approval
+        # prompt decided it. Everything below that would otherwise echo the
+        # value — the read-back, the result text, the display payload — is
+        # suppressed for these. Typing a password is now allowed; printing one
+        # into a transcript, a log and a model's context window is not, and
+        # without this the feature would do all three on every use.
+        element = self.browser.last_elements.get(args['ref'], {})
+        secret = classify_field(element)[0] is Risk.CREDENTIAL if element else False
+
         try:
             locator = await self.browser.find(args['ref'])
             await locator.scroll_into_view_if_needed(timeout=5000)
@@ -388,7 +404,7 @@ class BrowserTypeTool(_BrowserTool):
         # the URL it had just been given contained that exact date.
         moved = page.url != was_at
         landed = ''
-        if not moved:
+        if not moved and not secret:
             try:
                 landed = await locator.input_value(timeout=2000)
             except Exception:  # noqa: BLE001 - not every element has a value
@@ -403,11 +419,18 @@ class BrowserTypeTool(_BrowserTool):
 
         if moved:
             note = ' Pressing Enter submitted the form, so the page has changed — read it again.'
+        elif secret:
+            # Confirmed without being repeated: the model needs to know the
+            # field took something, and does not need the something.
+            note = ' The value is not repeated here, and is not in the log.'
         else:
             note = f' It now reads {landed!r}.' if landed else ''
+
+        what = 'Typed a secret into that field.' if secret else 'Typed.'
         return Output(
-            content=f'Typed.{note} The page is now {page.url}',
-            display={'url': page.url, 'value': landed, 'navigated': moved},
+            content=f'{what}{note} The page is now {page.url}',
+            display={'url': page.url, 'value': None if secret else landed,
+                     'navigated': moved, 'secret': secret},
         )
 
 

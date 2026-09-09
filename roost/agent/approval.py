@@ -15,9 +15,19 @@ everything by reflex, which is worse — a policy that is nominally strict but
 answered without reading is a policy that does nothing while claiming to. It
 is a deliberate, visible choice, and it never applies to `ask_user`.
 
+Money and secrets sit on a second axis and are not on that ladder at all.
+This harness is meant to be able to finish a task that ends at a checkout, so
+both are *possible*; neither is ever automatic. A purchase is confirmed in
+every mode, including `unrestricted`, and including a run nobody is watching —
+there is no flag that turns that off, because a flag like that is one somebody
+sets during a demo and still has set six months later. Secrets are confirmed
+too, and the value is kept out of the prompt, the transcript and the log.
+
 Remembered approvals are scoped to the tool *and its arguments*, not to the
 tool. Otherwise one "yes, and don't ask again" on `rm -rf build/` becomes
-permanent unattended `rm -rf` on anything.
+permanent unattended `rm -rf` on anything — and a purchase or a secret is
+never remembered at all, whatever the person ticks, because "don't ask again"
+about spending money is the one answer nobody should be able to give once.
 """
 
 from __future__ import annotations
@@ -43,9 +53,11 @@ class Mode(StrEnum):
 
 
 # What each mode allows without asking. Note what is absent from every row:
-# PURCHASE and CREDENTIAL. `unrestricted` means "stop asking me about this
-# machine", which is not the same sentence as "spend my money", and the two
-# should not be bought with one click.
+# PURCHASE and CREDENTIAL. Both are *possible* by default — this harness is
+# meant to be able to finish a task that ends in a checkout — but neither is
+# ever automatic. `unrestricted` means "stop asking me about this machine",
+# which is a different sentence from "spend my money", and autopilot means
+# "do not check in about steps", which is a different sentence again.
 AUTO: dict[Mode, set[Risk]] = {
     Mode.READ_ONLY: {Risk.READ},
     Mode.ASK: {Risk.READ},
@@ -97,14 +109,15 @@ def _fingerprint(call: ToolCall) -> str:
 class ApprovalPolicy:
     mode: Mode = Mode.ASK
     rules: list[Rule] = field(default_factory=list)
-    # Let it spend money without asking. Its own switch, orthogonal to `mode`,
-    # because an agent that can run any command on your laptop and an agent
-    # that can place orders on your card are different things to consent to.
-    allow_purchases: bool = False
-    # Let it type secrets into forms. Off, and the browser tool's default is
-    # to hand the field to you instead — which is better than an approval
-    # prompt, because then the agent never sees the value at all.
-    allow_credentials: bool = False
+    # Whether spending is possible at all — not whether it is automatic, which
+    # it never is. Off turns a purchase into a refusal rather than a prompt,
+    # for an install that should never be able to buy anything.
+    allow_purchases: bool = True
+    # The same, for typing a password, a card number or a one-time code.
+    # `browser_hand_over` is still there and is still the better move when the
+    # person is at the keyboard: a value the agent never receives cannot end
+    # up in a transcript, a log or a model's context window.
+    allow_credentials: bool = True
     # Tools that are always asked about regardless of mode or risk, for an
     # operator who wants a hard stop on one specific thing.
     always_ask: set[str] = field(default_factory=set)
@@ -125,15 +138,31 @@ class ApprovalPolicy:
         if _fingerprint(call) in self._remembered:
             return Decision.ALLOW, 'you approved this exact call earlier in the session'
 
-        if call.risk is Risk.CREDENTIAL and not self.allow_credentials:
-            # Refused rather than asked. The alternative to the agent typing
-            # your password is not you approving it typing your password; it
-            # is you typing it, in a window it cannot read.
-            return Decision.DENY, 'entering secrets is disabled — type it yourself in the browser'
+        # A mode whose whole promise is "this session cannot change anything"
+        # must not be escapable by clicking yes — and that has to include the
+        # two risks that bypass the mode ladder, or `read_only` would offer a
+        # checkout prompt while claiming to be read-only.
+        if self.mode is Mode.READ_ONLY and call.risk in (Risk.PURCHASE, Risk.CREDENTIAL):
+            return Decision.DENY, 'this session is read-only'
+
+        if call.risk is Risk.CREDENTIAL:
+            if not self.allow_credentials:
+                return Decision.DENY, 'entering secrets is switched off — type it yourself in the browser'
+            # Asked, never auto-run, and the value is never in the question.
+            # See `Assessment.summary` at every call site that grades
+            # CREDENTIAL: an approval prompt that prints the secret has
+            # defeated the point of guarding it.
+            return Decision.ASK, 'this enters a secret'
 
         if call.risk is Risk.PURCHASE:
-            if self.allow_purchases:
-                return Decision.ALLOW, 'purchases are allowed without asking on this install'
+            if not self.allow_purchases:
+                return Decision.DENY, 'spending money is switched off on this install'
+            # Always. There is no mode and no setting that skips this, and
+            # that is the whole design: `unrestricted` means "stop asking me
+            # about this machine", autopilot means "do not check in about
+            # steps" — neither has ever meant "spend without asking", and a
+            # single switch that made them mean it is a switch someone would
+            # set once and forget while an agent runs unattended.
             return Decision.ASK, 'this spends money'
 
         if call.risk in AUTO[self.mode]:
@@ -159,7 +188,21 @@ class ApprovalPolicy:
         self._remembered.add(_fingerprint(call))
 
     def describe(self) -> str:
+        """What this session may do without stopping, in a sentence.
+
+        Purchases are never in the list, whatever `allow_purchases` says: that
+        flag decides whether spending is *possible*, not whether it is
+        automatic. Saying otherwise in the one line a person reads at the top
+        of a session would be the most consequential lie this file could tell.
+        """
         auto = sorted(r.value for r in AUTO[self.mode])
+        line = f'{self.mode.value} (runs without asking: {", ".join(auto)})'
+
+        confirmed = []
         if self.allow_purchases:
-            auto.append('purchase')
-        return f'{self.mode.value} (runs without asking: {", ".join(auto)})'
+            confirmed.append('purchases')
+        if self.allow_credentials:
+            confirmed.append('entering secrets')
+        if confirmed:
+            line += f'; {" and ".join(confirmed)} are possible and always confirmed'
+        return line

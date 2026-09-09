@@ -110,7 +110,10 @@ def _denial_text(call: ToolCall, reason: str) -> str:
             'This is final. Do not attempt it another way, do not try a different button, '
             'and do not try to enter the details yourself. Stop pursuing this particular '
             'action, tell the person plainly what you were about to do and why it stopped, '
-            'and carry on with anything else they asked for.'
+            'and carry on with anything else they asked for.\n\n'
+            'Note that being able to do this at all is not the question — you are permitted '
+            'to buy things and to type secrets when the person agrees. They did not agree to '
+            'this one, and asking again in a different shape is how a "no" gets worn down.'
         )
     return (
         f'The user declined this. {said} '

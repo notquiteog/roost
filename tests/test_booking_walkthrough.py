@@ -194,14 +194,17 @@ async def test_it_books_up_to_the_point_of_paying(tmp_path):
                 f'"Book this room — pay now" graded {assessment.risk}, not a purchase'
             )
 
-            # Even here. `unrestricted` means "stop asking me about this
+            # Every mode. `unrestricted` means "stop asking me about this
             # machine"; it has never meant "spend my money", and this is the
-            # line that says so.
+            # line that says so. `read_only` refuses outright rather than
+            # prompting, because a mode promising nothing changes must not
+            # offer a checkout.
             call = ToolCall(id='c1', name='browser_click', arguments={'ref': book},
                             risk=assessment.risk, summary=assessment.summary)
             for mode in Mode:
                 decision, why = ApprovalPolicy(mode=mode).decide(call)
-                assert decision is Decision.ASK, f'{mode.value} would have booked it: {why}'
+                wanted = Decision.DENY if mode is Mode.READ_ONLY else Decision.ASK
+                assert decision is wanted, f'{mode.value} would have booked it: {why}'
 
             # Saving it for later is not a purchase, and grading everything on
             # the page as one would make the guard useless by making it

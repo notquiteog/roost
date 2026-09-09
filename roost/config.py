@@ -86,13 +86,13 @@ class Config:
     unconfined: bool = field(default_factory=lambda: _bool('ROOST_UNCONFINED'))
 
     # Money and secrets are their own axis, deliberately separate from
-    # `approval_mode`. `unrestricted` means "stop asking me about this
-    # machine"; it does not and should not also mean "spend my money".
-    allow_purchases: bool = field(default_factory=lambda: _bool('ROOST_ALLOW_PURCHASES'))
-    # Worth leaving off: with it off the browser hands password and payment
-    # fields to the person, so the agent never has the value in its context at
-    # all. Approving it to type a password is strictly worse than that.
-    allow_credentials: bool = field(default_factory=lambda: _bool('ROOST_ALLOW_CREDENTIALS'))
+    # `approval_mode`. Both are on: this is meant to be able to finish a task
+    # that ends at a checkout. Neither is ever automatic — a purchase is
+    # confirmed in every mode including `unrestricted`, and in a run nobody is
+    # watching. Setting either to false makes it a refusal rather than a
+    # prompt, for an install that should not be able to do it at all.
+    allow_purchases: bool = field(default_factory=lambda: _bool('ROOST_ALLOW_PURCHASES', True))
+    allow_credentials: bool = field(default_factory=lambda: _bool('ROOST_ALLOW_CREDENTIALS', True))
 
     # --- the web ----------------------------------------------------------
     web_enabled: bool = field(default_factory=lambda: _bool('ROOST_WEB', True))

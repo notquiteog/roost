@@ -85,7 +85,9 @@ class _Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
 
-        if url.path == '/results':
+        if url.path == '/login':
+            body = LOGIN
+        elif url.path == '/results':
             body = results_page(
                 query.get('city', ''), query.get('checkin', ''),
                 query.get('checkout', ''), query.get('guests', '2'),
@@ -134,3 +136,18 @@ class HotelSite:
     def __exit__(self, *exc) -> None:
         self.server.shutdown()
         self.server.server_close()
+
+
+LOGIN = """<!doctype html>
+<html><head><title>Sign in</title></head><body>
+<h1>Sign in</h1>
+<form>
+  <label for="email">Email</label>
+  <input id="email" name="email" autocomplete="off">
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="off">
+  <label for="card">Card number</label>
+  <input id="card" name="card_number" autocomplete="off">
+  <button name="signin">Sign in</button>
+</form>
+</body></html>"""

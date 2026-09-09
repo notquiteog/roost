@@ -408,11 +408,29 @@ by reflex, which is worse: a policy answered without being read is a policy
 that does nothing while claiming to. `ask_user` is never auto-answered, in any
 mode.
 
-Note what is in none of those rows: **purchases and credentials**.
-`unrestricted` means "stop asking me about this machine", which is not the
-same sentence as "spend my money", and no mode has ever meant both. The test
-suite asserts it in `unrestricted` specifically, because that is the mode
-where getting it wrong would actually cost someone.
+Note what is in none of those rows: **purchases and credentials**. They are
+not on that ladder at all — they are a second axis, and both are *on*, because
+a harness meant to finish a real task has to be able to reach the end of one.
+It can buy things. It can type a password, a card number or a one-time code.
+
+What it cannot do is either of them without you.
+
+A purchase is confirmed **in every mode, including `unrestricted`, and
+including an autopilot run nobody is watching**. There is no setting that
+skips that prompt — deliberately, because a setting like that is one somebody
+turns on during a demo and still has on six months later. Neither is ever
+remembered either: "don't ask again" about spending money is the one answer
+nobody should be able to give once. `ROOST_ALLOW_PURCHASES=false` turns a
+purchase into a refusal rather than a prompt, for an install that should not
+be able to buy anything at all.
+
+And a secret never becomes readable by anything else. Not in the approval
+prompt, not in the tool result, not in the transcript, and not in the page
+read — `browser_read` redacts a field's value *and* its label when the field
+holds a secret, which is how a typed password was coming back out. That was
+found by the test that now proves it, against a real browser and a real form.
+`browser_hand_over` is still there and is still better when you are at the
+keyboard: a value the agent never receives cannot leak from anywhere.
 
 ## With Perch
 

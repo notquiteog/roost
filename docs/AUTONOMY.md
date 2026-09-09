@@ -156,8 +156,11 @@ than to check in. `trusted` is the honest default for it, and it still stops
 for anything destructive, for money and for secrets.
 
 **Money still stops.** Being unattended does not relax that; it makes it more
-important. A run that reaches a checkout page waits, indefinitely, for a
-person — and if nobody comes, nothing is bought.
+important. An autopilot run *can* buy things and *can* type card details —
+those are capabilities it has — but neither happens without you saying yes to
+that specific step. A run that reaches a checkout waits, indefinitely, for a
+person, and if nobody comes, nothing is bought. There is no mode and no
+setting that changes it.
 
 **`ask_user` is still there, and the prompt tells it to use it.** A genuinely
 stuck agent — a login it cannot complete, a choice only you can make — should

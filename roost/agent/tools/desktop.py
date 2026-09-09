@@ -225,8 +225,10 @@ class DesktopTypeTool(_DesktopTool):
     name = 'desktop_type'
     description = (
         'Type text wherever the keyboard focus currently is. Click the field first. '
-        'Say what the field is in `field`. You cannot type passwords, card numbers or '
-        'one-time codes — ask the person to type those themselves.'
+        'Say what the field is in `field` — that is what the person is shown. Passwords, '
+        'card numbers and one-time codes can be typed and are confirmed first; say what '
+        'the field is and the value stays out of the prompt. Only type a secret the person '
+        'gave you for this purpose.'
     )
     input_schema = {
         'type': 'object',

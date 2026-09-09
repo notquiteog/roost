@@ -56,10 +56,26 @@ INTERACTIVE_JS = """
     const style = getComputedStyle(el);
     if (style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0') continue;
 
+    // Whether this field holds a secret, decided *here*, before the value
+    // crosses out of the page. It duplicates `_SECRET_NAME` in
+    // tools/browser.py and that duplication is deliberate: the Python side is
+    // the authority on how a call is *graded*, but by the time it sees this
+    // list the value has already been read out of the browser, put in a
+    // result and handed to a model. The only place a secret can be kept out
+    // of all three is on this side of the boundary.
+    const secretish = /(pass(word|wd|phrase)?|pwd|otp|mfa|2fa|totp|one[-_ ]?time|card[-_ ]?(number|num)?|ccnum|cc[-_ ]?number|credit[-_ ]?card|cvv|cvc|csc|security[-_ ]?code|verification[-_ ]?code|ssn|social[-_ ]?security|passport|pin|secret|api[-_ ]?key|token|private[-_ ]?key|seed[-_ ]?phrase|mnemonic|recovery[-_ ]?phrase)/i;
+    const naming = [el.getAttribute('name'), el.id, el.getAttribute('placeholder'),
+                    el.getAttribute('aria-label')].filter(Boolean).join(' ');
+    const isSecret = el.type === 'password' || secretish.test(naming);
+
     const label = (
       el.getAttribute('aria-label') ||
       el.innerText ||
-      el.value ||
+      // Never the value on a secret field. This fallback was how a typed
+      // password came back out: with no aria-label and no inner text, the
+      // element's *label* became whatever had been typed into it, and the
+      // separate redaction of `value` below did nothing to stop it.
+      (isSecret ? '' : el.value) ||
       el.getAttribute('placeholder') ||
       el.getAttribute('title') ||
       el.getAttribute('name') ||
@@ -81,7 +97,10 @@ INTERACTIVE_JS = """
       role: el.getAttribute('role') || '',
       label,
       href: el.getAttribute('href') || '',
-      value: (el.type === 'password' ? '' : (el.value || '')).slice(0, 60),
+      // Redacted by what the field *is*, not by its input type: a card
+      // number is `type=text` and was coming back in full.
+      value: (isSecret ? '' : (el.value || '')).slice(0, 60),
+      secret: isSecret,
       checked: el.checked === true,
       disabled: el.disabled === true,
       inViewport: r.top >= 0 && r.top < innerHeight,
