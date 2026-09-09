@@ -165,15 +165,17 @@ async def import_workflow(body: ImportWorkflow) -> dict[str, Any]:
     confirmation: it says which controls the panel will have, and whether the
     importer managed to find the prompt at all.
     """
-    from roost.providers.comfyui import ComfyUIProvider
+    from roost.media.workflow import install
+    from roost.providers.comfyui import WORKFLOW_DIR
 
     if not body.graph:
         raise HTTPException(status_code=400, detail='the graph is empty — did you use Save (API format)?')
 
-    # Any ComfyUI provider will do: installing a template is a local file
-    # operation and does not touch the server it would be run on.
-    provider = ComfyUIProvider('http://127.0.0.1:8188')
+    # No provider is constructed. This writes a file into the template
+    # directory and never speaks to a ComfyUI, so building something that
+    # looks like a connection to reach it would be inventing an address —
+    # and an invented address is one that will eventually be dialled.
     try:
-        return provider.install(body.name, body.graph, overrides=body.overrides)
+        return install(WORKFLOW_DIR, body.name, body.graph, overrides=body.overrides)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f'could not write the template: {exc}') from exc

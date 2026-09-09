@@ -256,7 +256,8 @@ class ImportWorkflowTool(_MediaTool):
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
         from roost.agent.tools.base import resolve_in_root
-        from roost.providers.comfyui import ComfyUIProvider
+        from roost.media.workflow import install
+        from roost.providers.comfyui import WORKFLOW_DIR
 
         graph = args.get('graph')
         if not graph:
@@ -266,8 +267,9 @@ class ImportWorkflowTool(_MediaTool):
             except (OSError, json.JSONDecodeError) as exc:
                 raise ToolError(f'could not read {path}: {exc}') from exc
 
-        provider = ComfyUIProvider('http://127.0.0.1:8188')
-        result = provider.install(args['name'], graph)
+        # A file operation, so no connection is constructed for it — see
+        # `workflow.install`.
+        result = install(WORKFLOW_DIR, args['name'], graph)
         tokens = ', '.join(result['tokens']) or 'none'
         warning = (
             ''

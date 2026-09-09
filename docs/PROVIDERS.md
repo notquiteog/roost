@@ -130,6 +130,27 @@ the port. It does not build a circuit and cannot tell Tor from any other SOCKS
 server — which is the truthful answer a cheap check can give, and enough to
 tell you whether the box you ticked has anything behind it.
 
+### What Tor does not cover
+
+Two paths deliberately have no Tor option, and it is better to say so than to
+let the tick box on another connection imply otherwise:
+
+* **Perch.** A Perch host is its own shape rather than a stored connection —
+  one host, one token, five services — and it is normally reached over an SSH
+  tunnel to loopback, where there is nothing for Tor to hide. Adding the
+  option means giving the probe *and* all five providers a transport, not one
+  of them.
+* **The realtime API.** One vendor's websocket, which cannot be pointed at
+  local hardware in the first place. The Live pane says both things before you
+  open it.
+
+Everything else goes through one transport, and a test greps for any adapter
+that builds its own HTTP session, because that is what the failure looks like:
+`OllamaProvider` accepted a transport and used it nowhere, so a connection
+with Tor on registered, probed, showed a "tor" tag — and sent every message
+straight out. A line marked `# transport-exempt: <why>` is how a genuine
+exception says so.
+
 ## Choosing a model
 
 If you name one, it is used. If you do not, the provider is asked and the

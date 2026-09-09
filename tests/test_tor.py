@@ -104,3 +104,63 @@ def test_a_direct_transport_has_no_proxy():
 def test_a_tor_transport_says_where_it_goes():
     described = Transport(tor=True, tor_host='127.0.0.1', tor_port=9150).describe()
     assert described == {'tor': True, 'proxy': '127.0.0.1:9150', 'timeout': 600}
+
+
+# -- every adapter actually uses the transport it was given ------------------
+
+
+def test_no_adapter_builds_its_own_http_session():
+    """The bug this exists to prevent was live.
+
+    `OllamaProvider` accepted a transport and then built its own
+    `aiohttp.ClientSession` in every one of its methods. A connection with the
+    Tor toggle on registered, probed, showed a "tor" tag in the UI — and sent
+    every message, every model listing and every embedding straight out. That
+    is strictly worse than not having the feature, because the operator
+    believes they are on Tor.
+
+    A grep, deliberately, rather than a mock: the failure is a *line of code*
+    that bypasses the transport, and the only reliable way to catch the next
+    one is to look for it. Where a session genuinely has to be built by hand,
+    mark the line `# transport-exempt: <why>` — a marker of its own rather
+    than ruff's `noqa`, which means something else and warns when borrowed.
+    """
+    import re
+    from pathlib import Path
+
+    providers = Path(__file__).resolve().parent.parent / 'roost' / 'providers'
+    building = re.compile(r'aiohttp\.ClientSession\s*\(')
+
+    offenders = []
+    for path in sorted(providers.glob('*.py')):
+        for number, line in enumerate(path.read_text().splitlines(), start=1):
+            if not building.search(line) or '# transport-exempt:' in line:
+                continue
+            offenders.append(f'{path.name}:{number}: {line.strip()}')
+
+    assert not offenders, (
+        'these build their own HTTP session instead of using self.transport, '
+        'so a connection routed through Tor would not be:\n  ' + '\n  '.join(offenders)
+    )
+
+
+async def test_a_tor_connection_refuses_rather_than_going_direct(monkeypatch):
+    """Missing SOCKS support is an error at the point of use.
+
+    Falling back to a direct connection would be the same lie in a different
+    place: the request succeeds, the operator sees no error, and the traffic
+    went the ordinary way.
+    """
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_socks(name, *args, **kwargs):
+        if name == 'aiohttp_socks':
+            raise ImportError('not installed')
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', no_socks)
+
+    with pytest.raises(tor.TorUnavailable, match='roost\\[tor\\]'):
+        Transport(tor=True).session()

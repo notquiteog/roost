@@ -231,3 +231,115 @@ async def test_a_query_is_embedded_as_a_query(tmp_path):
         asked = recorder.calls[-1]
         assert asked['input_type'] == 'query'
         assert asked['texts'][0].startswith('Instruct:'), 'a query wants the instruction'
+
+
+# -- where Ollama reports what a model can do -------------------------------
+
+
+def test_capabilities_are_read_from_wherever_the_build_puts_them():
+    """Builds disagree, and reading only one place is indistinguishable from
+    the model declaring nothing — which `can_serve` treats as "assume it can",
+    which is how an embedding model gets picked for chat."""
+    from roost.providers.ollama import _capabilities
+
+    assert _capabilities({'capabilities': ['embedding']}) == ['embedding']
+    assert _capabilities({'details': {'capabilities': ['tools']}}) == ['tools']
+    assert _capabilities({'details': {}}) == []
+
+    # An empty list at the top is not an answer, so it falls through rather
+    # than shadowing a nested one that has something to say.
+    assert _capabilities({'capabilities': [], 'details': {'capabilities': ['tools']}}) == ['tools']
+
+
+@pytest.mark.asyncio
+async def test_a_model_the_listing_did_not_classify_is_asked_about(monkeypatch):
+    """`/api/tags` officially carries no capability field at all. Where a build
+    honours that, every model comes back unclassified and the fallback is the
+    only thing standing between an embedding model and the chat route."""
+    from roost.providers.ollama import OllamaProvider
+
+    provider = OllamaProvider('http://example.invalid')
+    asked: list[str] = []
+
+    async def fake_tags():
+        return {'models': [{'name': 'chatty:7b'}, {'name': 'embedder:1b'}]}
+
+    async def fake_show(model):
+        asked.append(model)
+        return ['embedding'] if 'embed' in model else ['completion', 'tools']
+
+    monkeypatch.setattr(provider, '_show_capabilities', fake_show)
+    monkeypatch.setattr(
+        provider, 'models',
+        lambda: _models_with(provider, fake_tags, OllamaProvider.models),
+    )
+
+    rows = await provider.models()
+    by_id = {r['id']: r['capabilities'] for r in rows}
+    assert by_id['embedder:1b'] == ['embedding']
+    assert by_id['chatty:7b'] == ['completion', 'tools']
+    assert sorted(asked) == ['chatty:7b', 'embedder:1b'], 'both were unclassified'
+
+    assert pick_model(rows, Modality.CHAT, need_tools=True) == 'chatty:7b'
+
+
+async def _models_with(provider, fake_tags, real_models):
+    """Run the real `models()` against a stubbed HTTP layer.
+
+    Written this way rather than with a mock session because the thing under
+    test is the fallback logic, not aiohttp.
+    """
+    import types
+
+    body = await fake_tags()
+
+    class _Resp:
+        status = 200
+
+        async def json(self):
+            return body
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class _Session:
+        def get(self, *a, **kw):
+            return _Resp()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    stub = types.SimpleNamespace(session=lambda *a, **kw: _Session())
+    original = provider.transport
+    provider.transport = stub
+    try:
+        return await real_models(provider)
+    finally:
+        provider.transport = original
+
+
+@pytest.mark.asyncio
+async def test_asking_twice_only_costs_one_request(monkeypatch):
+    """A picker opening is not a reason to re-ask about every model, and a
+    server with no `/api/show` must not be asked forever."""
+    from roost.providers.ollama import OllamaProvider
+
+    provider = OllamaProvider('http://example.invalid')
+    calls: list[str] = []
+
+    class _Failing:
+        def session(self, *a, **kw):
+            calls.append('tried')
+            raise OSError('no such endpoint')
+
+    provider.transport = _Failing()
+
+    assert await provider._show_capabilities('x') == []
+    assert await provider._show_capabilities('x') == []
+    assert len(calls) == 1, 'a failure is remembered, not retried on every call'

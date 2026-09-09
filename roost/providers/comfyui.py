@@ -26,9 +26,7 @@ one behind Perch, which is worth more.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -233,19 +231,10 @@ class ComfyUIProvider(VideoProvider):
         return list(merged.values())
 
     def install(self, name: str, graph: dict[str, Any], *, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Import a ComfyUI API export as a template, tokenising it on the way in.
+        """Import a ComfyUI API export as a template.
 
-        The tokens it found are returned, because that is the only useful
-        confirmation: "imported" says nothing, and "found prompt, seed, steps,
-        width, height, frames" tells you at a glance whether it will be
-        driveable from a form or whether the graph needs a look.
+        Delegates, because installing a template touches the disk and not this
+        server — a caller that does not have a connection in hand should call
+        `workflow.install` directly rather than inventing one.
         """
-        safe = re.sub(r'[^a-zA-Z0-9._-]', '-', name).strip('-') or 'workflow'
-        WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
-        template, found = workflow_mod.tokenise(graph)
-        path = WORKFLOW_DIR / f'{safe}.json'
-        path.write_text(json.dumps(template, indent=2))
-        if overrides:
-            path.with_suffix('.roost.json').write_text(json.dumps(overrides, indent=2))
-        log.info('imported workflow %s with tokens: %s', safe, ', '.join(found) or 'none')
-        return {'id': safe, 'tokens': found, 'path': str(path)}
+        return workflow_mod.install(WORKFLOW_DIR, name, graph, overrides=overrides)

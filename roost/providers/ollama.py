@@ -9,11 +9,11 @@ JSON rather than SSE, which is a different parser however you dress it.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
-
-import aiohttp
 
 from roost.net.transport import Transport
 from roost.providers.base import (
@@ -32,6 +32,23 @@ from roost.providers.base import (
     ToolUseBlock,
 )
 from roost.providers.control_tokens import strip_control_tokens
+
+log = logging.getLogger(__name__)
+
+
+def _capabilities(model: dict[str, Any]) -> list[str]:
+    """What a `/api/tags` row says the model can do, wherever it says it.
+
+    Two places, because builds disagree: this machine's Ollama reports at the
+    top level and others nest it under `details`. Reading only one returns an
+    empty list from the other, and an empty list means "no idea" — which is
+    indistinguishable from a model that genuinely declares nothing.
+    """
+    top = model.get('capabilities')
+    if top:
+        return list(top)
+    nested = (model.get('details') or {}).get('capabilities')
+    return list(nested) if nested else []
 
 
 def _to_ollama_messages(messages: list[Message], system: str | None) -> list[dict[str, Any]]:
@@ -81,6 +98,24 @@ class OllamaProvider(ChatProvider, EmbeddingProvider):
         self.provider_id = provider_id
         self.timeout = timeout
         self.transport = transport or Transport(timeout=timeout)
+        # model -> capabilities, from `/api/show`. Per instance, which is per
+        # connection, so two servers with the same model name never share an
+        # answer about it.
+        self._capability_cache: dict[str, list[str]] = {}
+
+    def _session(self, timeout: float | None = None):
+        """Every request goes through the transport, without exception.
+
+        Ollama took a transport and then built its own session in all three of
+        its methods, which meant a connection with the Tor toggle on
+        registered, probed, showed a "tor" tag in the UI — and sent every
+        message, every model listing and every embedding straight out. That is
+        the exact failure the toggle exists to prevent, and it is worse than
+        not having the feature: the operator believes they are on Tor.
+
+        Anything added here uses this. There is no cheaper path.
+        """
+        return self.transport.session(timeout)
 
     def _headers(self) -> dict[str, str]:
         h = {'Content-Type': 'application/json'}
@@ -120,8 +155,7 @@ class OllamaProvider(ChatProvider, EmbeddingProvider):
         stop_reason = 'end_turn'
         counter = 0
 
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with self._session() as session:
             async with session.post(f'{self.base_url}/api/chat', json=payload, headers=self._headers()) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f'ollama: HTTP {resp.status}: {(await resp.text())[:500]}')
@@ -172,13 +206,24 @@ class OllamaProvider(ChatProvider, EmbeddingProvider):
         yield StreamDone(stop_reason=stop_reason, usage=usage)
 
     async def models(self) -> list[dict[str, Any]]:
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        """What is pulled, and what each one can be asked to do.
+
+        The capability field is the interesting part, and where it lives is
+        not settled. This Ollama reports it at the top level of `/api/tags`;
+        others put it under `details`; the documentation says `/api/tags`
+        carries none at all and that `/api/show` is the source. All three are
+        handled, because the consequence of finding nothing is not "no
+        information" — it is `can_serve` assuming a model can do anything,
+        which is how an embedding model gets chosen for chat and every
+        conversation comes back as an HTTP 400 naming the model rather than
+        the picker.
+        """
+        async with self._session(30) as session:
             async with session.get(f'{self.base_url}/api/tags', headers=self._headers()) as resp:
                 if resp.status != 200:
                     return []
                 body = await resp.json()
-        return [
+        listed = [
             {
                 'id': m['name'],
                 'provider': self.provider_id,
@@ -189,13 +234,52 @@ class OllamaProvider(ChatProvider, EmbeddingProvider):
                 # Carried because it is the only reliable way to tell an
                 # embedding model from a chat one — the names do not, and
                 # picking wrong produces a 400 that reads as a broken install.
-                'capabilities': (m.get('details') or {}).get('capabilities')
-                or m.get('capabilities')
-                or [],
+                'capabilities': _capabilities(m),
             }
             for m in body.get('models', [])
             if m.get('name')
         ]
+
+        # Anything the listing did not classify is asked about directly. Cached
+        # for the life of the process: capabilities cannot change without the
+        # model being pulled again, and this is otherwise a request per model
+        # every time a picker opens. Bounded, so a machine with forty models
+        # pulled does not open forty sockets at once.
+        unknown = [row for row in listed if not row['capabilities']]
+        if unknown:
+            gate = asyncio.Semaphore(5)
+
+            async def fill(row: dict[str, Any]) -> None:
+                async with gate:
+                    row['capabilities'] = await self._show_capabilities(row['id'])
+
+            await asyncio.gather(*(fill(row) for row in unknown), return_exceptions=True)
+
+        return listed
+
+    async def _show_capabilities(self, model: str) -> list[str]:
+        """`/api/show` for one model, remembered.
+
+        Failures are cached as "nothing known" rather than retried on every
+        call: a server that does not implement this endpoint would otherwise
+        be asked about every model, every time, forever.
+        """
+        if model in self._capability_cache:
+            return self._capability_cache[model]
+
+        found: list[str] = []
+        try:
+            async with self._session(30) as session:
+                async with session.post(
+                    f'{self.base_url}/api/show', json={'model': model}, headers=self._headers()
+                ) as resp:
+                    if resp.status == 200:
+                        found = (await resp.json()).get('capabilities') or []
+        except Exception as exc:  # noqa: BLE001 - an endpoint that is not there is an answer
+            log.debug('%s: /api/show for %s did not answer: %s', self.provider_id, model, exc)
+
+        self._capability_cache[model] = found
+        return found
 
     async def embed(
         self,
@@ -208,8 +292,7 @@ class OllamaProvider(ChatProvider, EmbeddingProvider):
         # Ollama takes neither an input type nor an output dimension. Both are
         # accepted and ignored so that swapping an embedding provider is a
         # configuration change rather than a code change at the call site.
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with self._session() as session:
             async with session.post(
                 f'{self.base_url}/api/embed', json={'model': model, 'input': texts}, headers=self._headers()
             ) as resp:

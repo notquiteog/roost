@@ -242,6 +242,41 @@ def tokenise(graph: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     return graph, sorted(set(found))
 
 
+def install(
+    directory: Path,
+    name: str,
+    graph: dict[str, Any],
+    *,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Write a ComfyUI export into the template directory, tokenising it.
+
+    A module function rather than a provider method, and that is the point:
+    this touches the disk and never the server. It used to be reached by
+    constructing a `ComfyUIProvider` pointed at a hard-coded loopback address
+    purely to call it — an object that looked like a connection and was not
+    the configured one. Nothing leaked, because nothing was sent; but the day
+    someone adds "check the graph against the server" to it, that call would
+    go to whatever is on local 8188 with no token, and on an install whose
+    ComfyUI is elsewhere it would be talking to a stranger.
+
+    The tokens it found come back, because that is the only useful
+    confirmation: "imported" says nothing, and "found prompt, seed, steps,
+    width, height, frames" tells you at a glance whether it will be driveable
+    from a form.
+    """
+    safe = re.sub(r'[^a-zA-Z0-9._-]', '-', name).strip('-') or 'workflow'
+    directory.mkdir(parents=True, exist_ok=True)
+    template, found = tokenise(graph)
+
+    path = directory / f'{safe}.json'
+    path.write_text(json.dumps(template, indent=2))
+    if overrides:
+        path.with_suffix('.roost.json').write_text(json.dumps(overrides, indent=2))
+    log.info('imported workflow %s with tokens: %s', safe, ', '.join(found) or 'none')
+    return {'id': safe, 'tokens': found, 'path': str(path)}
+
+
 def load(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     """A template and its sidecar overrides, if it has any."""
     graph = json.loads(path.read_text())
