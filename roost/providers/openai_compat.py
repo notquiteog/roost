@@ -22,6 +22,8 @@ from typing import Any
 
 import aiohttp
 
+from roost.media.params import Param, common_image
+from roost.net.transport import Transport
 from roost.providers.base import (
     ChatProvider,
     ChatRequest,
@@ -126,12 +128,14 @@ class OpenAICompatProvider(ChatProvider, EmbeddingProvider, STTProvider, TTSProv
         provider_id: str = 'openai',
         timeout: int = 600,
         headers: dict[str, str] | None = None,
+        transport: Transport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip('/')
         self.api_key = api_key
         self.provider_id = provider_id
         self.timeout = timeout
         self._extra_headers = headers or {}
+        self.transport = transport or Transport(timeout=timeout)
 
     def _headers(self) -> dict[str, str]:
         h = {'Content-Type': 'application/json', **self._extra_headers}
@@ -139,8 +143,11 @@ class OpenAICompatProvider(ChatProvider, EmbeddingProvider, STTProvider, TTSProv
             h['Authorization'] = f'Bearer {self.api_key}'
         return h
 
-    def _session(self) -> aiohttp.ClientSession:
-        return aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout))
+    def _session(self, timeout: float | None = None) -> aiohttp.ClientSession:
+        # Through the transport rather than built here, so that turning Tor on
+        # for this connection reaches chat, embeddings, speech and images at
+        # once instead of whichever of them was remembered.
+        return self.transport.session(timeout)
 
     # -- chat ---------------------------------------------------------------
 
@@ -262,10 +269,24 @@ class OpenAICompatProvider(ChatProvider, EmbeddingProvider, STTProvider, TTSProv
 
     # -- embeddings ---------------------------------------------------------
 
-    async def embed(self, texts: list[str], model: str) -> list[list[float]]:
+    async def embed(
+        self,
+        texts: list[str],
+        model: str,
+        *,
+        input_type: str = 'document',
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        # `input_type` is not part of OpenAI's shape and is deliberately
+        # dropped rather than passed through: several servers claiming
+        # compatibility 400 on an unknown field, and losing a quality nicety
+        # is better than losing the call.
+        payload: dict[str, Any] = {'model': model, 'input': texts}
+        if dimensions:
+            payload['dimensions'] = dimensions
         async with self._session() as session:
             async with session.post(
-                f'{self.base_url}/embeddings', json={'model': model, 'input': texts}, headers=self._headers()
+                f'{self.base_url}/embeddings', json=payload, headers=self._headers()
             ) as resp:
                 resp.raise_for_status()
                 body = await resp.json()
@@ -337,9 +358,102 @@ class OpenAICompatProvider(ChatProvider, EmbeddingProvider, STTProvider, TTSProv
     ) -> list[GeneratedMedia]:
         import base64
 
-        payload = {'model': model, 'prompt': prompt, 'n': n, 'size': size, 'response_format': 'b64_json', **kw}
+        payload: dict[str, Any] = {'model': model, 'prompt': prompt, 'n': n, 'size': size}
+
+        # `response_format` is a dall-e parameter and gpt-image-1 rejects it:
+        # that model always returns base64 and 400s on being told to. Sending
+        # it unconditionally is the single most common way this call fails.
+        if not model.startswith('gpt-image'):
+            payload['response_format'] = 'b64_json'
+
+        # Only the ones that were actually set. An explicit `style: null` is a
+        # 400 on several gateways that otherwise accept the request.
+        for key in ('quality', 'style', 'background', 'output_format',
+                    'output_compression', 'moderation'):
+            value = kw.pop(key, None)
+            if value not in (None, '', 'auto'):
+                payload[key] = value
+        payload.update(kw)
+
         async with self._session() as session:
-            async with session.post(f'{self.base_url}/images/generations', json=payload, headers=self._headers()) as resp:
-                resp.raise_for_status()
+            async with session.post(
+                f'{self.base_url}/images/generations', json=payload, headers=self._headers()
+            ) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(
+                        f'{self.provider_id} image: HTTP {resp.status}: {(await resp.text())[:300]}'
+                    )
                 body = await resp.json()
-        return [GeneratedMedia(data=base64.b64decode(d['b64_json']), media_type='image/png') for d in body['data']]
+
+        fmt = payload.get('output_format', 'png')
+        out: list[GeneratedMedia] = []
+        for row in body.get('data', []):
+            if row.get('b64_json'):
+                out.append(
+                    GeneratedMedia(
+                        data=base64.b64decode(row['b64_json']),
+                        media_type=f'image/{fmt}',
+                        meta={'revised_prompt': row.get('revised_prompt', '')},
+                    )
+                )
+            elif row.get('url'):
+                # Some gateways only return a URL. Fetched here rather than
+                # handed onward, so that every caller gets bytes and none of
+                # them has to know which backend it was talking to.
+                async with self._session(120) as session:
+                    async with session.get(row['url']) as media:
+                        media.raise_for_status()
+                        out.append(
+                            GeneratedMedia(data=await media.read(), media_type=f'image/{fmt}')
+                        )
+        return out
+
+    async def describe(self, model: str = '') -> list[Param]:
+        """The knobs this model actually has.
+
+        Branching on the model name rather than offering the union: `style` is
+        a dall-e-3 parameter and `background` is a gpt-image-1 one, and a form
+        showing both teaches people to set things that are being ignored.
+        """
+        params = common_image()
+        # No negative conditioning anywhere in this API. Left out rather than
+        # shown and dropped — a field that does nothing is worse than none.
+        params = [p for p in params if p.name != 'negative_prompt']
+        params = [p for p in params if p.name != 'seed']
+
+        if model.startswith('gpt-image'):
+            return params + [
+                Param('size', 'Size', 'enum', default='1024x1024',
+                      options=['1024x1024', '1536x1024', '1024x1536', 'auto'], group='shape'),
+                Param('quality', 'Quality', 'enum', default='auto',
+                      options=['auto', 'low', 'medium', 'high'], group='quality',
+                      help='Higher costs more and takes longer. "auto" lets the model pick.'),
+                Param('background', 'Background', 'enum', default='auto',
+                      options=['auto', 'transparent', 'opaque'], group='output',
+                      help='Transparent needs png or webp output.'),
+                Param('output_format', 'File format', 'enum', default='png',
+                      options=['png', 'jpeg', 'webp'], group='output', advanced=True),
+                Param('output_compression', 'Compression', 'int', default=100, minimum=0,
+                      maximum=100, step=1, group='output', advanced=True,
+                      help='For jpeg and webp only.'),
+                Param('moderation', 'Moderation', 'enum', default='auto', options=['auto', 'low'],
+                      group='output', advanced=True),
+            ]
+
+        if model.startswith('dall-e-3'):
+            return params + [
+                Param('size', 'Size', 'enum', default='1024x1024',
+                      options=['1024x1024', '1792x1024', '1024x1792'], group='shape'),
+                Param('quality', 'Quality', 'enum', default='standard',
+                      options=['standard', 'hd'], group='quality'),
+                Param('style', 'Style', 'enum', default='vivid', options=['vivid', 'natural'],
+                      group='quality',
+                      help='"vivid" pushes toward dramatic and saturated; "natural" does not.'),
+            ]
+
+        # An OpenAI-shaped server this build has never heard of. The three
+        # parameters every one of them takes, and nothing invented on top.
+        return params + [
+            Param('size', 'Size', 'string', default='1024x1024', group='shape',
+                  help='Whatever sizes this server accepts — it is not one this build knows.'),
+        ]

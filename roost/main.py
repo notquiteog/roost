@@ -15,6 +15,7 @@ from roost.config import config
 from roost.providers.bootstrap import bootstrap
 from roost.providers.registry import registry
 from roost.routers import agent as agent_router
+from roost.routers import media as media_router
 from roost.routers import memory as memory_router
 from roost.routers import providers as providers_router
 from roost.routers import voice as voice_router
@@ -43,6 +44,16 @@ async def lifespan(app: FastAPI):
             live = len(mcp_manager.servers)
             if live:
                 log.info('mcp: %d server(s), %d tool(s)', live, len(mcp_manager.tools()))
+
+    # Media generation exists whenever something is registered that can make
+    # a picture. No switch of its own: an install with no image provider
+    # already cannot generate, and a second toggle saying so would only be a
+    # way to have the feature off while it looks on.
+    from roost.media.service import MediaService
+    from roost.media.store import MediaStore
+
+    media_router.service = MediaService(MediaStore(config.media_dir), registry)
+    app.state.media = media_router.service
 
     if config.memory_enabled:
         from roost.memory.service import MemoryService
@@ -75,6 +86,7 @@ app.include_router(agent_router.http)
 app.include_router(voice_router.router)
 app.include_router(providers_router.router)
 app.include_router(memory_router.router)
+app.include_router(media_router.router)
 
 
 STATIC = Path(__file__).parent / 'static'

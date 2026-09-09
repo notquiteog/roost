@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -92,6 +93,12 @@ class BrowserConfig:
     viewport: tuple[int, int] = (1280, 900)
     timeout_ms: int = 30_000
     user_agent: str | None = None
+    # Environment for the browser process — in practice a DISPLAY, which is
+    # what puts a real headful Chromium onto the agent's own X server rather
+    # than onto the screen the person is using. A visible browser on a display
+    # nobody is looking at is the best of both: the agent can see it with the
+    # desktop tools, and it cannot steal focus from anyone.
+    env: dict[str, str] = field(default_factory=dict)
 
 
 class BrowserSession:
@@ -127,13 +134,20 @@ class BrowserSession:
                 width, height = self.config.viewport
                 # A persistent context rather than launch()+new_context(): it is
                 # what keeps cookies, logins and local storage across runs.
-                self._context = await self._pw.chromium.launch_persistent_context(
-                    user_data_dir=str(self.config.profile_dir),
-                    headless=self.config.headless,
-                    viewport={'width': width, 'height': height},
-                    user_agent=self.config.user_agent,
-                    args=['--disable-blink-features=AutomationControlled'],
-                )
+                launch: dict[str, Any] = {
+                    'user_data_dir': str(self.config.profile_dir),
+                    'headless': self.config.headless,
+                    'viewport': {'width': width, 'height': height},
+                    'user_agent': self.config.user_agent,
+                    'args': ['--disable-blink-features=AutomationControlled'],
+                }
+                if self.config.env:
+                    # Inherited and overlaid rather than replaced: a bare
+                    # environment loses PATH, HOME and the XDG variables, and
+                    # Chromium fails to start in ways that read as a Playwright
+                    # bug rather than as a missing variable.
+                    launch['env'] = {**os.environ, **self.config.env}
+                self._context = await self._pw.chromium.launch_persistent_context(**launch)
                 self._context.set_default_timeout(self.config.timeout_ms)
 
             pages = self._context.pages

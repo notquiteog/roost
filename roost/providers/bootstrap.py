@@ -12,13 +12,38 @@ from __future__ import annotations
 import logging
 
 from roost.config import Config
+from roost.providers import connections
 from roost.providers.anthropic import AnthropicProvider
 from roost.providers.base import Modality, ProviderInfo
+from roost.providers.connections import ConnectionStore
 from roost.providers.ollama import OllamaProvider
 from roost.providers.openai_compat import OpenAICompatProvider
-from roost.providers.registry import ProviderRegistry, RouteSet
+from roost.providers.registry import ProviderRegistry, Route, RouteSet
 
 log = logging.getLogger(__name__)
+
+
+def _default_routes(cfg: Config) -> RouteSet:
+    """The install's own choice per modality.
+
+    Only chat and embedding are pinned from configuration, and they are pinned
+    separately. Everything else falls through to "first provider that can do
+    it", which prefers local hardware — see `ProviderRegistry.resolve`.
+
+    Naming a provider that is not registered is left to fail at resolution
+    rather than dropped here, because the failure names the missing provider
+    and being quietly served by a different one is the outcome this design
+    exists to prevent.
+    """
+    routes = RouteSet(local_only=cfg.local_only)
+    if cfg.chat_provider:
+        routes.routes[Modality.CHAT] = Route(provider=cfg.chat_provider, model=cfg.default_chat_model)
+    if cfg.embed_provider:
+        options = {'dimensions': cfg.embed_dimensions} if cfg.embed_dimensions else {}
+        routes.routes[Modality.EMBEDDING] = Route(
+            provider=cfg.embed_provider, model=cfg.embed_model, options=options
+        )
+    return routes
 
 
 async def bootstrap(cfg: Config, registry: ProviderRegistry) -> list[str]:
@@ -105,7 +130,26 @@ async def bootstrap(cfg: Config, registry: ProviderRegistry) -> list[str]:
         )
         registered.append('openwebui')
 
-    registry.set_defaults(RouteSet(local_only=cfg.local_only))
+    # Connections added through the UI, which outlive the process and can be
+    # changed without restarting it. Registered last so that a connection
+    # someone made deliberately replaces an environment-configured one with
+    # the same id — the newer decision is the one they can see and edit.
+    stored = ConnectionStore(cfg.connections_db).load()
+    for conn in stored:
+        if not conn.enabled:
+            continue
+        try:
+            info, impls = connections.build(conn)
+        except Exception as exc:  # noqa: BLE001
+            # One bad connection must not stop the daemon. It is reported and
+            # left unregistered, which is also what the UI shows.
+            log.warning('connection %s could not be built: %s', conn.id, exc)
+            continue
+        registry.register(info, impls, connection=conn)
+        if conn.id not in registered:
+            registered.append(conn.id)
+
+    registry.set_defaults(_default_routes(cfg))
 
     if not registered:
         log.warning(

@@ -278,6 +278,13 @@ const VERBS = {
   desktop_click: 'Clicked',
   desktop_type: 'Typed',
   desktop_key: 'Pressed',
+  desktop_scroll: 'Scrolled',
+  desktop_stage: 'Checked the screen',
+  media_params: 'Checked what it can tune',
+  generate_image: 'Generated',
+  generate_video: 'Started rendering',
+  media_job: 'Checked on the render',
+  import_workflow: 'Installed the workflow',
   ask_user: 'Asked you',
 };
 

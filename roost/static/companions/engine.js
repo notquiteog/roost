@@ -79,6 +79,17 @@ const TOOL_STATES = {
   desktop_click: 'desktop',
   desktop_type: 'desktop',
   desktop_key: 'desktop',
+  desktop_scroll: 'desktop',
+  desktop_stage: 'desktop',
+  // Generation is a long wait on somebody else's GPU, which is what
+  // 'running' already means here. It gets its own word in the caption rather
+  // than its own animation: a sixth state would need frames drawing in five
+  // creatures, and the wait looks the same from outside either way.
+  generate_image: 'running',
+  generate_video: 'running',
+  media_params: 'reading',
+  media_job: 'reading',
+  import_workflow: 'writing',
   ask_user: 'waiting',
 };
 

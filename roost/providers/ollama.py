@@ -15,6 +15,7 @@ from typing import Any
 
 import aiohttp
 
+from roost.net.transport import Transport
 from roost.providers.base import (
     ChatProvider,
     ChatRequest,
@@ -65,7 +66,13 @@ def _to_ollama_messages(messages: list[Message], system: str | None) -> list[dic
 
 class OllamaProvider(ChatProvider, EmbeddingProvider):
     def __init__(
-        self, base_url: str = 'http://localhost:11434', api_key: str = '', *, provider_id: str = 'ollama', timeout: int = 600
+        self,
+        base_url: str = 'http://localhost:11434',
+        api_key: str = '',
+        *,
+        provider_id: str = 'ollama',
+        timeout: int = 600,
+        transport: Transport | None = None,
     ) -> None:
         # Tolerates a base URL given with or without the /api suffix, because
         # both forms are in every guide on the internet.
@@ -73,6 +80,7 @@ class OllamaProvider(ChatProvider, EmbeddingProvider):
         self.api_key = api_key
         self.provider_id = provider_id
         self.timeout = timeout
+        self.transport = transport or Transport(timeout=timeout)
 
     def _headers(self) -> dict[str, str]:
         h = {'Content-Type': 'application/json'}
@@ -181,7 +189,17 @@ class OllamaProvider(ChatProvider, EmbeddingProvider):
             if m.get('name')
         ]
 
-    async def embed(self, texts: list[str], model: str) -> list[list[float]]:
+    async def embed(
+        self,
+        texts: list[str],
+        model: str,
+        *,
+        input_type: str = 'document',
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        # Ollama takes neither an input type nor an output dimension. Both are
+        # accepted and ignored so that swapping an embedding provider is a
+        # configuration change rather than a code change at the call site.
         timeout = aiohttp.ClientTimeout(total=self.timeout)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(

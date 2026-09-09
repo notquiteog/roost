@@ -1,10 +1,19 @@
 """ComfyUI, for video and for the diffusion models that only exist as graphs.
 
 ComfyUI does not take a prompt; it takes a workflow — a graph of nodes with
-the prompt buried somewhere inside it. So a template is stored per model
-family and the prompt is injected into named nodes. That is why this provider
-carries workflow JSON at all, and why adding a new video model is usually a
-template rather than code.
+the prompt buried somewhere inside it, in a node whose number depends on the
+order somebody added things in the editor. So a template is stored per model
+family and the prompt is injected into it. That is why this provider carries
+workflow JSON at all, and why adding a new video model is a template rather
+than code.
+
+The claim in that last sentence used to be aspirational, because a template
+still had to be hand-edited and nothing knew what it could be asked for.
+`roost.media.workflow` is what makes it true: a template marks its inputs with
+`%prompt%`-style tokens, the form is inferred from which tokens are present,
+and `install()` takes a ComfyUI "Save (API format)" export and puts the tokens
+in for you. So a new model really is one file, and the panel that drives it
+appears by itself.
 
 One constraint shapes the polling below. Perch's allowlist matches exact
 paths, so `/history/{prompt_id}` — the obvious way to check on one job — is
@@ -17,40 +26,23 @@ one behind Perch, which is worth more.
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Any
 
 import aiohttp
 
+from roost.media import workflow as workflow_mod
+from roost.media.params import Param
+from roost.net.transport import Transport
 from roost.providers.base import GeneratedMedia, VideoProvider
 
 log = logging.getLogger(__name__)
 
 WORKFLOW_DIR = Path(__file__).parent / 'workflows'
-
-# Where the prompt goes in a template. A workflow marks its own injection
-# points with these strings, so a template is editable in ComfyUI itself and
-# then saved out without needing code to know its node numbering.
-PROMPT_TOKEN = '%prompt%'
-NEGATIVE_TOKEN = '%negative%'
-SEED_TOKEN = '%seed%'
-
-
-def _inject(node_tree: Any, prompt: str, negative: str, seed: int) -> Any:
-    """Replace the marker strings anywhere they appear in the graph."""
-    if isinstance(node_tree, dict):
-        return {k: _inject(v, prompt, negative, seed) for k, v in node_tree.items()}
-    if isinstance(node_tree, list):
-        return [_inject(v, prompt, negative, seed) for v in node_tree]
-    if isinstance(node_tree, str):
-        if node_tree == SEED_TOKEN:
-            return seed
-        return node_tree.replace(PROMPT_TOKEN, prompt).replace(NEGATIVE_TOKEN, negative)
-    return node_tree
 
 
 class ComfyUIProvider(VideoProvider):
@@ -62,6 +54,7 @@ class ComfyUIProvider(VideoProvider):
         provider_id: str = 'comfyui',
         timeout: int = 1800,
         poll_interval: float = 1.5,
+        transport: Transport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip('/')
         self.api_key = api_key
@@ -71,6 +64,7 @@ class ComfyUIProvider(VideoProvider):
         self.timeout = timeout
         self.poll_interval = poll_interval
         self.client_id = str(uuid.uuid4())
+        self.transport = transport or Transport(timeout=timeout)
 
     def _headers(self) -> dict[str, str]:
         h = {'Content-Type': 'application/json'}
@@ -78,28 +72,44 @@ class ComfyUIProvider(VideoProvider):
             h['Authorization'] = f'Bearer {self.api_key}'
         return h
 
-    def _load_workflow(self, model: str) -> dict[str, Any]:
-        path = WORKFLOW_DIR / f'{model}.json'
-        if not path.is_file():
-            available = sorted(p.stem for p in WORKFLOW_DIR.glob('*.json'))
+    def _template_path(self, model: str) -> Path:
+        # Resolved and checked against the directory, because a model name
+        # arrives from a request and `../../etc/passwd` is a path too.
+        path = (WORKFLOW_DIR / f'{model}.json').resolve()
+        if WORKFLOW_DIR.resolve() not in path.parents or not path.is_file():
+            available = sorted(p.stem for p in WORKFLOW_DIR.glob('*.json') if not p.name.endswith('.roost.json'))
             raise FileNotFoundError(
-                f'no workflow template named {model!r}; have: {", ".join(available) or "none"}'
+                f'no workflow template named {model!r}; have: {", ".join(available) or "none"}. '
+                'Export one from ComfyUI with Save (API format) and import it — see '
+                'roost/providers/workflows/README.md.'
             )
-        return json.loads(path.read_text())
+        return path
+
+    def _load_workflow(self, model: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        return workflow_mod.load(self._template_path(model))
 
     async def generate(self, prompt: str, *, model: str, **kw: Any) -> list[GeneratedMedia]:
         import random
 
-        seed = kw.pop('seed', None)
-        if seed is None:
-            seed = random.randint(0, 2**31 - 1)
-        negative = kw.pop('negative_prompt', '')
+        graph, _ = self._load_workflow(model)
 
-        workflow = _inject(copy.deepcopy(self._load_workflow(model)), prompt, negative, seed)
+        seed = kw.pop('seed', None)
+        if seed in (None, -1, ''):
+            # ComfyUI needs a number. -1 is our spelling of "surprise me", and
+            # it is resolved here rather than sent, so the seed that produced a
+            # result is recorded and the result can be reproduced.
+            seed = random.randint(0, 2**31 - 1)
+
+        values = {
+            'prompt': prompt,
+            'negative': kw.pop('negative_prompt', kw.pop('negative', '')),
+            'seed': int(seed),
+            **{k: v for k, v in kw.items() if v is not None},
+        }
+        workflow = workflow_mod.inject(graph, values)
         payload = {'prompt': workflow, 'client_id': self.client_id}
 
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with self.transport.session() as session:
             async with session.post(f'{self.base_url}/prompt', json=payload, headers=self._headers()) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f'{self.provider_id}: queue failed: {(await resp.text())[:300]}')
@@ -110,7 +120,7 @@ class ComfyUIProvider(VideoProvider):
                 raise RuntimeError(f'{self.provider_id}: no prompt_id in queue response')
 
             outputs = await self._await_completion(session, prompt_id)
-            return await self._collect(session, outputs, seed)
+            return await self._collect(session, outputs, int(seed))
 
     async def _await_completion(self, session: aiohttp.ClientSession, prompt_id: str) -> dict[str, Any]:
         """Poll until this job appears in history.
@@ -166,15 +176,76 @@ class ComfyUIProvider(VideoProvider):
         return media
 
     async def interrupt(self) -> None:
-        timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with self.transport.session(15) as session:
             await session.post(f'{self.base_url}/interrupt', headers=self._headers())
 
     async def models(self) -> list[dict[str, Any]]:
         """The workflow templates on disk, not the checkpoints on the server.
 
         A template is the unit a caller can actually ask for; a checkpoint
-        without a graph around it is not runnable.
+        without a graph around it is not runnable. Each row carries the tokens
+        its template uses, so a client can say "this one takes a frame count
+        and that one does not" without loading every graph.
         """
-        WORKFLOW_DIR.mkdir(exist_ok=True)
-        return [{'id': p.stem, 'provider': self.provider_id} for p in sorted(WORKFLOW_DIR.glob('*.json'))]
+        WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
+        out: list[dict[str, Any]] = []
+        for path in sorted(WORKFLOW_DIR.glob('*.json')):
+            if path.name.endswith('.roost.json'):
+                continue
+            try:
+                graph, overrides = workflow_mod.load(path)
+            except (OSError, ValueError) as exc:
+                log.warning('workflow %s is not loadable: %s', path.name, exc)
+                continue
+            out.append(
+                {
+                    'id': path.stem,
+                    'provider': self.provider_id,
+                    'label': overrides.get('label', path.stem),
+                    'kind': overrides.get('kind', 'video'),
+                    'tokens': sorted(workflow_mod.tokens_in(graph)),
+                    'note': overrides.get('note', ''),
+                }
+            )
+        return out
+
+    async def describe(self, model: str = '') -> list[Param]:
+        """The form for one template, from the tokens it actually uses.
+
+        No template named: the union of every token in every installed
+        template, which is what a picker needs before a model has been chosen.
+        """
+        WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
+        if model:
+            graph, overrides = self._load_workflow(model)
+            return workflow_mod.describe(graph, overrides.get('params'))
+
+        merged: dict[str, Param] = {}
+        for path in sorted(WORKFLOW_DIR.glob('*.json')):
+            if path.name.endswith('.roost.json'):
+                continue
+            try:
+                graph, overrides = workflow_mod.load(path)
+            except (OSError, ValueError):
+                continue
+            for param in workflow_mod.describe(graph, overrides.get('params')):
+                merged.setdefault(param.name, param)
+        return list(merged.values())
+
+    def install(self, name: str, graph: dict[str, Any], *, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Import a ComfyUI API export as a template, tokenising it on the way in.
+
+        The tokens it found are returned, because that is the only useful
+        confirmation: "imported" says nothing, and "found prompt, seed, steps,
+        width, height, frames" tells you at a glance whether it will be
+        driveable from a form or whether the graph needs a look.
+        """
+        safe = re.sub(r'[^a-zA-Z0-9._-]', '-', name).strip('-') or 'workflow'
+        WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
+        template, found = workflow_mod.tokenise(graph)
+        path = WORKFLOW_DIR / f'{safe}.json'
+        path.write_text(json.dumps(template, indent=2))
+        if overrides:
+            path.with_suffix('.roost.json').write_text(json.dumps(overrides, indent=2))
+        log.info('imported workflow %s with tokens: %s', safe, ', '.join(found) or 'none')
+        return {'id': safe, 'tokens': found, 'path': str(path)}

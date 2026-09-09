@@ -27,6 +27,13 @@ under a permissive policy because it graded them first. Here the floor is
 
 The honest summary: desktop autopilot is meaningfully less safe than browser
 autopilot, and if the task can be done in the browser it should be.
+
+Everything below goes through a *stage* — see `roost/agent/stage.py` — which
+is what decides whether the pointer being moved is the one on the person's
+desk. Coordinates are always relative to the picture the model was shown, so
+a model working on the second monitor never has to know its screen starts
+2560 pixels along, and a coordinate outside that picture is refused rather
+than clamped: a clamped click lands on something real.
 """
 
 from __future__ import annotations
@@ -35,6 +42,7 @@ import base64
 import time
 from typing import Any
 
+from roost.agent.stage import Stage, StageUnavailable, UserHasTheMouse
 from roost.agent.tools.base import Assessment, Output, Tool, ToolContext, ToolError
 from roost.agent.tools.browser import classify_click, classify_field
 from roost.protocol.agent import Risk
@@ -45,49 +53,71 @@ STALE_AFTER = 45.0
 
 
 class _DesktopTool(Tool):
-    def __init__(self, state: dict[str, Any]) -> None:
+    def __init__(self, stage: Stage, state: dict[str, Any]) -> None:
+        self.stage = stage
         # Shared between the tools so a click can tell whether a screenshot
         # has been taken since the last thing that changed the screen.
         self.state = state
+
+    async def _act(self, what, *args) -> None:
+        """Run one input action off the event loop, translating its failures.
+
+        `UserHasTheMouse` is not an error in the ordinary sense — nothing went
+        wrong, a person picked up their mouse — so it becomes a tool error the
+        model reads and stops on, rather than an exception that ends the turn.
+        """
+        import asyncio
+
+        try:
+            await asyncio.to_thread(what, *args)
+        except UserHasTheMouse as exc:
+            raise ToolError(str(exc)) from exc
+        except (StageUnavailable, ValueError) as exc:
+            raise ToolError(str(exc)) from exc
 
 
 class DesktopScreenshotTool(_DesktopTool):
     name = 'desktop_screenshot'
     description = (
-        'Take a picture of the whole screen. Do this before every click or drag: '
-        'coordinates are worked out from what you see, and anything you saw more than '
-        'a few seconds ago may have moved.'
+        'Take a picture of the screen you are working on. Do this before every click or '
+        'drag: coordinates are worked out from what you see, and anything you saw more '
+        'than a few seconds ago may have moved. The top-left of the picture is (0, 0) — '
+        'always use those coordinates, never the ones you might infer from a window title '
+        'bar or a taskbar position.'
     )
     input_schema = {'type': 'object', 'properties': {}}
 
     def assess(self, args: dict[str, Any], ctx: ToolContext) -> Assessment:
-        return Assessment(risk=Risk.READ, summary='screenshot the desktop')
+        return Assessment(risk=Risk.READ, summary=f'screenshot the {self.stage.kind} screen')
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
         import asyncio
 
-        from roost.agent import desktop
-
         try:
             # Capture shells out and blocks; off the loop so a voice call in
             # the same process does not stutter.
-            png = await asyncio.to_thread(desktop.capture)
-            size = await asyncio.to_thread(desktop.screen_size)
-        except desktop.DesktopUnavailable as exc:
+            png = await asyncio.to_thread(self.stage.capture)
+            rect = self.stage.rect()
+        except StageUnavailable as exc:
             raise ToolError(str(exc)) from exc
 
         self.state['last_shot'] = time.monotonic()
-        self.state['size'] = size
 
         encoded = base64.b64encode(png).decode()
+        where = (
+            'a display of its own — the person can keep using their mouse'
+            if not self.stage.shares_pointer
+            else 'the screen the person is looking at'
+        )
         return Output(
-            content=f'Screenshot taken: {size.width}x{size.height}. '
+            content=f'Screenshot taken: {rect.width}x{rect.height}, on {where}. '
                     'Coordinates are in pixels from the top-left of the image below.',
             display={
                 'image': encoded,
                 'media_type': 'image/png',
-                'width': size.width,
-                'height': size.height,
+                'width': rect.width,
+                'height': rect.height,
+                'stage': self.stage.kind,
             },
             # The same image, to the model. Without this it receives only the
             # sentence above and will describe a screen it has never seen.
@@ -127,6 +157,14 @@ class DesktopClickTool(_DesktopTool):
                 invalid='label is required — say what you are clicking, it is what the person is shown',
             )
 
+        rect = self.stage.rect()
+        if not rect.contains(x, y):
+            return Assessment(
+                risk=Risk.EXECUTE, summary='',
+                invalid=f'({x}, {y}) is off the screen you are working on, which is '
+                        f'{rect.width}x{rect.height}. Take a screenshot and read the coordinates off it.',
+            )
+
         last = self.state.get('last_shot')
         if last is None:
             return Assessment(
@@ -151,22 +189,9 @@ class DesktopClickTool(_DesktopTool):
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
         import asyncio
 
-        from roost.agent import desktop
-
-        try:
-            size = self.state.get('size') or await asyncio.to_thread(desktop.screen_size)
-            pointer = await asyncio.to_thread(desktop.make_input, size)
-        except desktop.DesktopUnavailable as exc:
-            raise ToolError(str(exc)) from exc
-
-        try:
-            await asyncio.to_thread(pointer.move, args['x'], args['y'])
-            await asyncio.sleep(0.08)
-            await asyncio.to_thread(
-                pointer.click, args.get('button', 'left'), bool(args.get('double'))
-            )
-        finally:
-            await asyncio.to_thread(pointer.close)
+        await self._act(self.stage.move, args['x'], args['y'])
+        await asyncio.sleep(0.08)
+        await self._act(self.stage.click, args.get('button', 'left'), bool(args.get('double')))
 
         # The screen has almost certainly changed, so the old screenshot must
         # not be reused to aim the next click.
@@ -189,6 +214,10 @@ class DesktopTypeTool(_DesktopTool):
         'properties': {
             'text': {'type': 'string'},
             'field': {'type': 'string', 'description': 'What you are typing into, as labelled on screen.'},
+            'then_enter': {
+                'type': 'boolean',
+                'description': 'Press Enter afterwards. Saves a round trip on a search box.',
+            },
         },
         'required': ['text', 'field'],
     }
@@ -208,23 +237,13 @@ class DesktopTypeTool(_DesktopTool):
         return Assessment(risk=risk, summary=f'type {shown!r} into {field!r}')
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
-        import asyncio
-
-        from roost.agent import desktop
-
-        try:
-            size = self.state.get('size') or await asyncio.to_thread(desktop.screen_size)
-            pointer = await asyncio.to_thread(desktop.make_input, size)
-        except desktop.DesktopUnavailable as exc:
-            raise ToolError(str(exc)) from exc
-
-        try:
-            await asyncio.to_thread(pointer.type_text, args['text'])
-        finally:
-            await asyncio.to_thread(pointer.close)
+        await self._act(self.stage.type_text, args['text'])
+        if args.get('then_enter'):
+            await self._act(self.stage.key, 'enter')
 
         self.state['last_shot'] = None
-        return Output(content=f'Typed {len(args["text"])} characters into {args["field"]!r}.')
+        suffix = ' and pressed Enter' if args.get('then_enter') else ''
+        return Output(content=f'Typed {len(args["text"])} characters into {args["field"]!r}{suffix}.')
 
 
 class DesktopKeyTool(_DesktopTool):
@@ -246,32 +265,90 @@ class DesktopKeyTool(_DesktopTool):
         return Assessment(risk=Risk.EXECUTE, summary=f'press {combo}')
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
-        import asyncio
-
-        from roost.agent import desktop
-
-        try:
-            size = self.state.get('size') or await asyncio.to_thread(desktop.screen_size)
-            pointer = await asyncio.to_thread(desktop.make_input, size)
-        except desktop.DesktopUnavailable as exc:
-            raise ToolError(str(exc)) from exc
-
-        try:
-            await asyncio.to_thread(pointer.key, args['combo'])
-        except ValueError as exc:
-            raise ToolError(str(exc)) from exc
-        finally:
-            await asyncio.to_thread(pointer.close)
-
+        await self._act(self.stage.key, args['combo'])
         self.state['last_shot'] = None
         return Output(content=f'Pressed {args["combo"]}.')
 
 
-def desktop_tools() -> list[Tool]:
+class DesktopScrollTool(_DesktopTool):
+    name = 'desktop_scroll'
+    description = (
+        'Scroll the window under a point. Positive scrolls up, negative scrolls down, '
+        'in wheel clicks. Take a screenshot afterwards — what is on screen has changed.'
+    )
+    input_schema = {
+        'type': 'object',
+        'properties': {
+            'x': {'type': 'integer'},
+            'y': {'type': 'integer'},
+            'amount': {'type': 'integer', 'description': 'Wheel clicks. Negative is down. Try -5.'},
+        },
+        'required': ['x', 'y', 'amount'],
+    }
+
+    def assess(self, args: dict[str, Any], ctx: ToolContext) -> Assessment:
+        amount = args.get('amount')
+        if not isinstance(amount, int) or amount == 0:
+            return Assessment(risk=Risk.READ, summary='', invalid='amount must be a non-zero integer')
+        rect = self.stage.rect()
+        x, y = args.get('x'), args.get('y')
+        if not (isinstance(x, int) and isinstance(y, int) and rect.contains(x, y)):
+            return Assessment(
+                risk=Risk.READ, summary='',
+                invalid=f'({x}, {y}) is off the {rect.width}x{rect.height} screen you are working on',
+            )
+        # Scrolling changes nothing and buys nothing — it is how you read the
+        # rest of a page, and making it an approval prompt would mean a person
+        # clicking yes forty times to let an agent read one document.
+        return Assessment(risk=Risk.READ, summary=f'scroll {"up" if amount > 0 else "down"} at ({x}, {y})')
+
+    async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
+        await self._act(self.stage.move, args['x'], args['y'])
+        await self._act(self.stage.scroll, args['amount'])
+        self.state['last_shot'] = None
+        return Output(content=f'Scrolled {args["amount"]} clicks. Take a screenshot to see the result.')
+
+
+class DesktopStageTool(_DesktopTool):
+    name = 'desktop_stage'
+    description = (
+        'Ask where you are working: how big the screen is, and whether it is a display of '
+        'your own or the one the person is looking at. Worth knowing before you start — on '
+        'a shared screen you are sharing their mouse and should say so before taking it.'
+    )
+    input_schema = {'type': 'object', 'properties': {}}
+
+    def assess(self, args: dict[str, Any], ctx: ToolContext) -> Assessment:
+        return Assessment(risk=Risk.READ, summary='ask about the screen')
+
+    async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
+        info = self.stage.describe()
+        if info['shares_pointer']:
+            note = (
+                'This is the screen the person is looking at, and you share their pointer. '
+                'Moving it moves theirs. Say what you are about to do before you do it, and '
+                'if a click is refused because the pointer moved, that is them using their '
+                'own computer — stop and ask.'
+            )
+        else:
+            note = (
+                'This is a display of your own. Nothing you do here touches the person\'s '
+                'mouse, keyboard or windows; they watch through the screenshots you take. '
+                'Applications you start from the shell appear here.'
+            )
+        return Output(
+            content=f'{info["width"]}x{info["height"]}, {info["kind"]} stage.\n{note}',
+            display=info,
+        )
+
+
+def desktop_tools(stage: Stage) -> list[Tool]:
     state: dict[str, Any] = {}
     return [
-        DesktopScreenshotTool(state),
-        DesktopClickTool(state),
-        DesktopTypeTool(state),
-        DesktopKeyTool(state),
+        DesktopStageTool(stage, state),
+        DesktopScreenshotTool(stage, state),
+        DesktopClickTool(stage, state),
+        DesktopTypeTool(stage, state),
+        DesktopKeyTool(stage, state),
+        DesktopScrollTool(stage, state),
     ]

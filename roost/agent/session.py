@@ -122,6 +122,7 @@ class AgentSession:
         confined: bool = True,
         browser: Any = None,
         checkpoints: Any = None,
+        stage: Any = None,
     ) -> None:
         self.id = session_id or uuid.uuid4().hex[:16]
         self.title = title
@@ -136,6 +137,10 @@ class AgentSession:
         # Undo for this session's own file edits. See checkpoint.py for what it
         # does not cover — a shell command can write anywhere.
         self.checkpoints = checkpoints
+        # Where its hands are, when it has any. Owned here for the same reason
+        # the browser is: a virtual stage is an X server, and an X server
+        # nobody shut down is an X server still running tomorrow.
+        self.stage = stage
         self.provider = provider
         self.model = model
         self.policy = policy or ApprovalPolicy()
@@ -208,6 +213,14 @@ class AgentSession:
                 await self.browser.close()
             except Exception:  # noqa: BLE001
                 log.debug('browser did not close cleanly', exc_info=True)
+
+        if self.stage is not None:
+            try:
+                # After the browser: closing the display out from under a
+                # Chromium running on it leaves a process with nowhere to draw.
+                self.stage.close()
+            except Exception:  # noqa: BLE001
+                log.debug('stage did not close cleanly', exc_info=True)
 
         await self._emit(SessionEnded(session_id=self.id, reason=reason))
 

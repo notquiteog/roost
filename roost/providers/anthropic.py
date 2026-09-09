@@ -15,8 +15,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-import aiohttp
-
+from roost.net.transport import Transport
 from roost.providers.base import (
     ChatProvider,
     ChatRequest,
@@ -70,11 +69,13 @@ class AnthropicProvider(ChatProvider):
         *,
         provider_id: str = 'anthropic',
         timeout: int = 600,
+        transport: Transport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip('/')
         self.api_key = api_key
         self.provider_id = provider_id
         self.timeout = timeout
+        self.transport = transport or Transport(timeout=timeout)
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -115,8 +116,7 @@ class AnthropicProvider(ChatProvider):
         usage: dict[str, int] = {}
         stop_reason = 'end_turn'
 
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with self.transport.session() as session:
             async with session.post(f'{self.base_url}/messages', json=payload, headers=self._headers()) as resp:
                 if resp.status != 200:
                     body = await resp.text()
@@ -179,8 +179,7 @@ class AnthropicProvider(ChatProvider):
         yield StreamDone(stop_reason=stop_reason, usage=usage)
 
     async def models(self) -> list[dict[str, Any]]:
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with self.transport.session(30) as session:
             async with session.get(f'{self.base_url}/models', headers=self._headers()) as resp:
                 if resp.status != 200:
                     return []

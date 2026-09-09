@@ -82,6 +82,50 @@ class Config:
     # on a labelled DOM element can.
     desktop_enabled: bool = field(default_factory=lambda: _bool('ROOST_DESKTOP'))
 
+    # Where desktop control happens. `virtual` gives the agent a display of
+    # its own, which is the only setting under which your mouse and keyboard
+    # are genuinely untouched while it works — see roost/agent/stage.py.
+    # `shared` drives the screen you are looking at. `auto` prefers virtual
+    # and falls back to shared when no X server can be started.
+    desktop_stage: str = field(default_factory=lambda: os.getenv('ROOST_DESKTOP_STAGE', 'auto'))
+    # Which monitor it may touch, on a shared stage with more than one. An
+    # index as X arranges them (1 is the first), or a name from xrandr.
+    # Everything outside that rectangle is neither captured nor clickable.
+    desktop_monitor: str = field(default_factory=lambda: os.getenv('ROOST_DESKTOP_MONITOR', ''))
+    # The X display for a shared stage, when it is not $DISPLAY.
+    desktop_display: str = field(default_factory=lambda: os.getenv('ROOST_DESKTOP_DISPLAY', ''))
+    desktop_virtual_size: str = field(
+        default_factory=lambda: os.getenv('ROOST_DESKTOP_VIRTUAL_SIZE', '1920x1080')
+    )
+    # On a shared stage, give the pointer back the moment a person moves it.
+    # The agent's work is interrupted rather than fought over: a cursor being
+    # dragged out from under someone is worse than a task that stopped.
+    desktop_yield_to_user: bool = field(default_factory=lambda: _bool('ROOST_DESKTOP_YIELD', True))
+
+    # --- generated media --------------------------------------------------
+    media_dir: Path = field(
+        default_factory=lambda: Path(os.getenv('ROOST_MEDIA_DIR', ''))
+        if os.getenv('ROOST_MEDIA_DIR')
+        else Path(os.getenv('ROOST_DATA_DIR', './data')) / 'media'
+    )
+    # What a generation may cost before it is refused, in seconds. Video is
+    # minutes rather than seconds, and a default HTTP timeout ends jobs that
+    # were going to succeed.
+    image_timeout: int = field(default_factory=lambda: _int('ROOST_IMAGE_TIMEOUT', 600))
+    video_timeout: int = field(default_factory=lambda: _int('ROOST_VIDEO_TIMEOUT', 1800))
+
+    # --- the realtime voice API -------------------------------------------
+    # OpenAI's speech-to-speech endpoint, which is its own protocol rather
+    # than a modality the registry can route: one socket carries audio, text,
+    # interruption and tool calls together.
+    realtime_model: str = field(
+        default_factory=lambda: os.getenv('ROOST_REALTIME_MODEL', 'gpt-realtime')
+    )
+    realtime_voice: str = field(default_factory=lambda: os.getenv('ROOST_REALTIME_VOICE', 'marin'))
+    realtime_url: str = field(
+        default_factory=lambda: os.getenv('ROOST_REALTIME_URL', 'wss://api.openai.com/v1/realtime')
+    )
+
     # --- the browser ------------------------------------------------------
     browser_enabled: bool = field(default_factory=lambda: _bool('ROOST_BROWSER'))
     # A real profile, logged into by hand once. The agent inherits the sessions
@@ -116,6 +160,17 @@ class Config:
     openwebui_url: str = field(default_factory=lambda: os.getenv('OPENWEBUI_BASE_URL', ''))
     openwebui_key: str = field(default_factory=lambda: os.getenv('OPENWEBUI_API_KEY', ''))
 
+    # Which connection answers, per modality. Chat and embedding are named
+    # separately and deliberately: the model you think with and the model you
+    # remember with are different choices, they have different privacy
+    # consequences, and tying them together is how someone ends up sending
+    # their whole memory to a vendor they only wanted for chat.
+    chat_provider: str = field(default_factory=lambda: os.getenv('ROOST_CHAT_PROVIDER', ''))
+    embed_provider: str = field(default_factory=lambda: os.getenv('ROOST_EMBED_PROVIDER', ''))
+    # Ask a truncatable embedding model for shorter vectors. Cannot be changed
+    # under an existing store — vectors of different lengths are not comparable.
+    embed_dimensions: int = field(default_factory=lambda: _int('ROOST_EMBED_DIMENSIONS', 0))
+
     default_chat_model: str = field(default_factory=lambda: os.getenv('ROOST_CHAT_MODEL', ''))
     default_stt_model: str = field(default_factory=lambda: os.getenv('ROOST_STT_MODEL', 'whisper-1'))
     default_tts_model: str = field(default_factory=lambda: os.getenv('ROOST_TTS_MODEL', 'tts-1'))
@@ -131,6 +186,13 @@ class Config:
     # person then decides for themselves. Off here means the store is never
     # even opened.
     memory_enabled: bool = field(default_factory=lambda: _bool('ROOST_MEMORY'))
+    # Where connections, checkpoints, memory and generated media live.
+    data_dir: Path = field(default_factory=lambda: Path(os.getenv('ROOST_DATA_DIR', './data')))
+    connections_db: Path = field(
+        default_factory=lambda: Path(os.getenv('ROOST_CONNECTIONS', ''))
+        if os.getenv('ROOST_CONNECTIONS')
+        else Path(os.getenv('ROOST_DATA_DIR', './data')) / 'connections.json'
+    )
     memory_db: Path = field(
         default_factory=lambda: Path(os.getenv('ROOST_MEMORY_DB', '')) if os.getenv('ROOST_MEMORY_DB')
         else Path(os.getenv('ROOST_DATA_DIR', './data')) / 'memory.db'

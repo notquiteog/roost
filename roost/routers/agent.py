@@ -20,6 +20,7 @@ from roost.agent.manager import manager
 from roost.config import config
 from roost.providers.base import Modality
 from roost.providers.registry import NoProviderError, Route, RouteSet, registry
+from roost.routers import media as media_router
 from roost.routers import memory as memory_router
 
 log = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ async def create_session(body: CreateSession) -> dict[str, object]:
             mode=Mode(body.mode or config.approval_mode),
             title=body.title,
             memory=memory_router.service,
+            media=media_router.service,
             user_id=config.default_user,
         )
     except ValueError as exc:
@@ -181,6 +183,7 @@ async def agent_socket(
                 model=chosen,
                 mode=Mode(mode or config.approval_mode),
                 memory=memory_router.service,
+                media=media_router.service,
                 user_id=config.default_user,
             )
         except (NoProviderError, ValueError) as exc:

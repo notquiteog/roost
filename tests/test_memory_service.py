@@ -22,9 +22,15 @@ class FakeEmbedder:
     def __init__(self, fail: bool = False):
         self.fail = fail
         self.calls = 0
+        # What the last call asked for, so a test can check that a query was
+        # embedded as a query rather than as a passage.
+        self.last_input_type = None
+        self.last_dimensions = None
 
-    async def embed(self, texts, model):
+    async def embed(self, texts, model, *, input_type='document', dimensions=None):
         self.calls += 1
+        self.last_input_type = input_type
+        self.last_dimensions = dimensions
         if self.fail:
             raise RuntimeError('embedding backend is down')
         out = []

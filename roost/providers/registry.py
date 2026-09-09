@@ -64,6 +64,10 @@ class _Entry:
     # does chat, embeddings, speech both ways and images — so instances are
     # stored per modality rather than per provider.
     impls: dict[Modality, Any]
+    # The stored connection this was built from, when it came from one.
+    # Environment-configured providers have none, which is also how the UI
+    # knows which entries it may edit and which are pinned by the install.
+    connection: Any = None
 
 
 class ProviderRegistry:
@@ -73,11 +77,14 @@ class ProviderRegistry:
 
     # -- registration -------------------------------------------------------
 
-    def register(self, info: ProviderInfo, impls: dict[Modality, Any]) -> None:
+    def register(self, info: ProviderInfo, impls: dict[Modality, Any], connection: Any = None) -> None:
         # Registering the same id twice replaces it, so reconfiguring a
         # connection at runtime does not need a restart or a deregister call.
-        self._entries[info.id] = _Entry(info=info, impls=dict(impls))
-        log.info('provider %s registered for %s', info.id, ','.join(sorted(m.value for m in impls)))
+        self._entries[info.id] = _Entry(info=info, impls=dict(impls), connection=connection)
+        carried = ' over tor' if connection is not None and getattr(connection, 'tor', False) else ''
+        log.info(
+            'provider %s registered for %s%s', info.id, ','.join(sorted(m.value for m in impls)), carried
+        )
 
     def unregister(self, provider_id: str) -> None:
         self._entries.pop(provider_id, None)
@@ -113,6 +120,43 @@ class ProviderRegistry:
             for e in self._entries.values()
             if modality in e.impls and (not local_only or e.info.local)
         ]
+
+    def connection(self, provider_id: str) -> Any:
+        """The stored connection behind a provider, or None if it came from the
+        environment. Used to decide whether a UI may offer to edit it."""
+        entry = self._entries.get(provider_id)
+        return entry.connection if entry else None
+
+    def impl(self, provider_id: str, modality: Modality) -> Any:
+        """The object serving one modality for one provider, without routing.
+
+        For asking a specific provider what models it has — a question about
+        that connection rather than about which one should answer next.
+        """
+        entry = self._entries.get(provider_id)
+        if entry is None:
+            raise NoProviderError(f'no such provider: {provider_id}')
+        if modality not in entry.impls:
+            raise NoProviderError(f'{provider_id} is not registered for {modality.value}')
+        return entry.impls[modality]
+
+    def describe(self, provider_id: str) -> dict[str, Any]:
+        """Everything a client should know about one provider, keys excluded."""
+        entry = self._entries.get(provider_id)
+        if entry is None:
+            raise NoProviderError(f'no such provider: {provider_id}')
+        conn = entry.connection
+        return {
+            'id': entry.info.id,
+            'label': entry.info.label,
+            'local': entry.info.local,
+            'base_url': entry.info.base_url,
+            'modalities': sorted(m.value for m in entry.impls),
+            'editable': conn is not None,
+            'tor': bool(getattr(conn, 'tor', False)),
+            'host_id': getattr(conn, 'host_id', ''),
+            'has_key': bool(getattr(conn, 'api_key', '')),
+        }
 
     def capabilities(self, *, local_only: bool = False) -> dict[str, list[str]]:
         """What this install can do, by modality — the answer a UI needs to

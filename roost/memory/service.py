@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 
 from roost.memory.store import Memory, MemoryStore, Settings
+from roost.providers import catalog
 from roost.providers.base import Modality
 from roost.providers.registry import NoProviderError, ProviderRegistry
 
@@ -56,12 +57,40 @@ class MemoryService:
 
     # -- embedding ----------------------------------------------------------
 
-    async def _embed(self, texts: list[str]) -> list[list[float]]:
+    async def _embed(self, texts: list[str], *, input_type: str = 'document') -> list[list[float]]:
+        """Vectors, from whichever provider is routed to embeddings.
+
+        Note which provider that is: `Modality.EMBEDDING`, resolved on its own.
+        The chat model has nothing to do with it. Someone can think on
+        Anthropic and remember on their own Qwen3 without either decision
+        touching the other, and this line is where that separation is real
+        rather than merely offered in a UI.
+
+        Two model-specific details are applied here rather than in the
+        adapters, because only this layer knows whether it is storing a
+        passage or asking a question:
+
+        - a query prefix, for models that express the query/document
+          asymmetry as an instruction in the text — Qwen3-Embedding and Gemini
+          Embedding 2 both do, and a passage embedded with the prefix is
+          embedded wrongly;
+        - `dimensions`, from the route's options, for models that can return a
+          shorter vector. It must not change under an existing store: the
+          store refuses to compare vectors of different lengths, so a change
+          here makes old memories unsearchable rather than wrong.
+        """
         impl, route, _ = self.registry.resolve(Modality.EMBEDDING)
         model = self.model or route.model
         if not model:
             raise NoProviderError('no embedding model is configured (set ROOST_EMBED_MODEL)')
-        return await impl.embed(texts, model)
+
+        if input_type == 'query':
+            prefix = catalog.query_prefix(model)
+            if prefix:
+                texts = [prefix + t for t in texts]
+
+        dimensions = route.options.get('dimensions') or None
+        return await impl.embed(texts, model, input_type=input_type, dimensions=dimensions)
 
     # -- writing ------------------------------------------------------------
 
@@ -115,7 +144,7 @@ class MemoryService:
             return Recall(memories=[], reason='nothing remembered yet')
 
         try:
-            vectors = await self._embed([query])
+            vectors = await self._embed([query], input_type='query')
         except Exception as exc:  # noqa: BLE001
             # Never fatal. A turn that cannot remember is still a turn.
             log.warning('recall failed, continuing without memory: %s', exc)

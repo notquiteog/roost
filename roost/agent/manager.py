@@ -50,11 +50,29 @@ class SessionManager:
         title: str = '',
         memory: Any = None,
         user_id: str = '',
+        media: Any = None,
         cfg: Any = None,
     ) -> AgentSession:
         from roost.config import config as default_config
 
         cfg = cfg or default_config
+
+        # The stage comes first, because the browser wants to be launched onto
+        # it. Built eagerly rather than lazily: it is an X server, starting one
+        # takes a second, and doing that inside a tool's synchronous `assess`
+        # would block the loop at the worst possible moment. Desktop control is
+        # off by default, so only installs that asked for it pay anything.
+        stage = None
+        if cfg.desktop_enabled:
+            from roost.agent import stage as stage_mod
+
+            try:
+                stage = stage_mod.build(cfg)
+            except stage_mod.StageUnavailable as exc:
+                # Not fatal. A session with no hands is still a session that
+                # can read, write and run commands, and failing to create it
+                # would be a worse answer than creating it without a screen.
+                log.warning('desktop control is on but no stage could be made: %s', exc)
 
         browser = None
         if cfg.browser_enabled:
@@ -62,8 +80,21 @@ class SessionManager:
 
             # Constructed, not started: launching Chromium takes a few hundred
             # milliseconds and most sessions never open a page.
+            #
+            # On a stage of its own the browser is launched *headful* whatever
+            # the setting says, and the setting is not being ignored: headless
+            # exists to keep a browser off your screen, and a display nobody is
+            # looking at already does that. Headful there is strictly better —
+            # the desktop tools can see it, sites that fingerprint headless
+            # Chromium behave, and it still cannot take your focus.
+            on_stage = stage is not None and not stage.shares_pointer
             browser = BrowserSession(
-                BrowserConfig(profile_dir=cfg.browser_profile, headless=cfg.browser_headless)
+                BrowserConfig(
+                    profile_dir=cfg.browser_profile,
+                    headless=False if on_stage else cfg.browser_headless,
+                    viewport=(stage.rect().width, stage.rect().height) if on_stage else (1280, 900),
+                    env=stage.env() if stage is not None else {},
+                )
             )
 
         checkpoints = None
@@ -87,7 +118,8 @@ class SessionManager:
             checkpoints=checkpoints,
             web=cfg if cfg.web_enabled else None,
             browser=browser,
-            desktop=cfg.desktop_enabled,
+            stage=stage,
+            media=media,
         )
         self._sessions[session.id] = session
         await session.start()

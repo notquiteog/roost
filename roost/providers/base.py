@@ -163,7 +163,28 @@ class ChatProvider(abc.ABC):
 
 class EmbeddingProvider(abc.ABC):
     @abc.abstractmethod
-    async def embed(self, texts: list[str], model: str) -> list[list[float]]: ...
+    async def embed(
+        self,
+        texts: list[str],
+        model: str,
+        *,
+        input_type: str = 'document',
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        """Vectors for these texts, in this order.
+
+        `input_type` exists because several current models are asymmetric: a
+        passage being stored and a question being asked are embedded
+        differently, and using one setting for both costs recall in a way that
+        reads as the model being worse than advertised rather than as a bug.
+        Providers that do not draw the distinction ignore it.
+
+        `dimensions` asks for a shorter vector from a model that supports
+        truncation. It is the one parameter that must not change under an
+        existing store: vectors of different lengths cannot be compared, so
+        the store records what each was made with.
+        """
+
 
 
 @dataclass(slots=True)

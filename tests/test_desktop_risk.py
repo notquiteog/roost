@@ -12,12 +12,53 @@ import time
 
 import pytest
 
+from roost.agent.stage import Rect
 from roost.agent.tools.desktop import STALE_AFTER, desktop_tools
 from roost.protocol.agent import Risk
 
 
-def tools():
-    found = {t.name: t for t in desktop_tools()}
+class FakeStage:
+    """A stage that reports a size and swallows input.
+
+    Real input is not the thing under test here — the grading is — and a test
+    that moved a real pointer would be a test nobody could run while working.
+    """
+
+    kind = 'virtual'
+    shares_pointer = False
+
+    def __init__(self, width=1280, height=800):
+        self._rect = Rect(0, 0, width, height)
+        self.actions = []
+
+    def rect(self):
+        return self._rect
+
+    def capture(self):
+        return b'\x89PNG fake'
+
+    def move(self, x, y):
+        self.actions.append(('move', x, y))
+
+    def click(self, button='left', double=False):
+        self.actions.append(('click', button, double))
+
+    def type_text(self, text):
+        self.actions.append(('type', text))
+
+    def key(self, combo):
+        self.actions.append(('key', combo))
+
+    def scroll(self, amount):
+        self.actions.append(('scroll', amount))
+
+    def describe(self):
+        return {'kind': self.kind, 'shares_pointer': self.shares_pointer,
+                'width': self._rect.width, 'height': self._rect.height, 'origin': [0, 0]}
+
+
+def tools(stage=None):
+    found = {t.name: t for t in desktop_tools(stage or FakeStage())}
     return found, found['desktop_click'].state
 
 

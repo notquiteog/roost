@@ -88,7 +88,7 @@ def is_wayland() -> bool:
 # --- capture -----------------------------------------------------------------
 
 
-def _capture_wayland() -> bytes:
+def _capture_wayland(output: str = '') -> bytes:
     """Capture through the compositor's own portal-backed tool.
 
     Every desktop exposes a different one and none of them share a flag, so
@@ -102,7 +102,10 @@ def _capture_wayland() -> bytes:
 
         if shutil.which('grim'):
             target = out / 'shot.png'
-            subprocess.run(['grim', str(target)], check=True, capture_output=True, timeout=30)
+            # `-o` is the one per-output flag any of these tools offer, which
+            # is why multi-monitor targeting elsewhere crops the image instead.
+            argv = ['grim', *(['-o', output] if output else []), str(target)]
+            subprocess.run(argv, check=True, capture_output=True, timeout=30)
             return target.read_bytes()
 
         if shutil.which('cosmic-screenshot'):
@@ -152,10 +155,10 @@ def _capture_mss() -> bytes:
     return buf.getvalue()
 
 
-def capture() -> bytes:
-    """A PNG of the whole primary display."""
+def capture(output: str = '') -> bytes:
+    """A PNG of the whole primary display, or of one named Wayland output."""
     if sys.platform.startswith('linux') and is_wayland():
-        return _capture_wayland()
+        return _capture_wayland(output)
     if sys.platform == 'darwin' and shutil.which('screencapture'):
         # The system tool, because it is already permitted once the user has
         # granted Screen Recording — no second permission to explain.

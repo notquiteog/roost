@@ -48,10 +48,16 @@ def mcp_tools(manager: Any) -> list[Tool]:
     return build(manager)
 
 
-def desktop_tools() -> list[Tool]:
+def media_tools(service: Any) -> list[Tool]:
+    from roost.agent.tools.media import media_tools as build
+
+    return build(service)
+
+
+def desktop_tools(stage: Any) -> list[Tool]:
     from roost.agent.tools.desktop import desktop_tools as build
 
-    return build()
+    return build(stage)
 
 
 def browser_tools(browser: Any) -> list[Tool]:
@@ -92,7 +98,8 @@ def build_session(
     allow_credentials: bool = False,
     web: Any = None,
     browser: Any = None,
-    desktop: bool = False,
+    stage: Any = None,
+    media: Any = None,
     mcp: Any = None,
     checkpoints: Any = None,
 ) -> AgentSession:
@@ -133,8 +140,10 @@ def build_session(
         chosen = [*chosen, *web_tools(web)]
     if browser is not None:
         chosen = [*chosen, *browser_tools(browser)]
-    if desktop:
-        chosen = [*chosen, *desktop_tools()]
+    if stage is not None:
+        chosen = [*chosen, *desktop_tools(stage)]
+    if media is not None:
+        chosen = [*chosen, *media_tools(media)]
     if mcp is not None:
         chosen = [*chosen, *mcp_tools(mcp)]
 
@@ -159,4 +168,5 @@ def build_session(
         confined=confined,
         browser=browser,
         checkpoints=checkpoints,
+        stage=stage,
     )
