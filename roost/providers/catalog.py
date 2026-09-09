@@ -263,7 +263,48 @@ class EmbeddingModel:
     # embedded with it is embedded wrongly, which is why this is a property of
     # the model rather than something a caller remembers to pass.
     instruct_queries: bool = False
+    #: The model Roost's memory and recall are built and tested against. Not a
+    #: quality ranking and not a default — several entries here are better. It
+    #: marks the line below which a FEATURE stops being able to assume its
+    #: retrieval is good enough, which is a different question from what an
+    #: operator may choose. See FLOOR_CHAT below and docs/PROVIDERS.md.
+    floor: bool = False
     note: str = ''
+
+
+# ---------- The floor ----------
+#
+# What Roost's features are built and tested against. Not what will start:
+# nothing here refuses a smaller model, and `ROOST_MODEL` takes any id at all.
+# What the floor governs is what a FEATURE may assume.
+#
+# Below it the agent loop does not get slower, it gets unreliable in ways that
+# read as the harness being broken: prose where a tool call was needed, a plan
+# the model wrote two turns ago and has already lost.
+#
+# **The tool budget is part of the floor, not a footnote to it.** gemma4:12b
+# completed a five-step browser task in 26 seconds, first try, with the toolset
+# narrowed to `browser` + `web` — about ten tools. The same model, same task,
+# same prompt, given all thirty, opened the page and then reported it had no
+# way to browse. So `TOOLSETS` and the `tools` list on POST /api/sessions are
+# the mitigation this floor implies, and handing a floor model everything is a
+# way of putting it below the floor without changing the model.
+#
+# Honest about the evidence: those measurements are gemma4:12b on this machine.
+# qwen3.5:9b is named because the rest of this family tests against it, not
+# because Roost has measured it. And even narrowed, a 12B is not enough for
+# `autopilot` — see the README.
+#
+# The other end is a first-class target and needs nothing from this file: a
+# frontier model with thinking enabled gets the same tools through the same
+# guards, and reasoning is streamed as its own channel rather than folded into
+# the answer.
+FLOOR_CHAT: tuple[str, ...] = ('qwen3.5:9b', 'gemma4:12b')
+
+#: Roughly the tool count a floor model handles without losing track of what it
+#: has. Advisory — nothing enforces it — but it is the number behind the advice
+#: to narrow a session's toolsets on a small model.
+FLOOR_TOOL_BUDGET = 12
 
 
 EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
@@ -326,7 +367,10 @@ EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
         truncatable=True,
         max_input_tokens=32000,
         instruct_queries=True,
-        note='Half the memory of the 8B for most of the quality; the one to start with on a single consumer GPU.',
+        floor=True,
+        note='The floor: what memory and recall are built and tested against. '
+             'Half the memory of the 8B for most of the quality, and the one to '
+             'start with on a single consumer GPU.',
     ),
     EmbeddingModel(
         id='text-embedding-3-small',

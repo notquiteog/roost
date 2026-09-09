@@ -67,13 +67,20 @@ fallback to a hosted one.
 | `gemini-embedding-2` | 3072 | Google. 8192 input tokens, truncatable from 128 up |
 | `voyage-3-large` | 1024 | Voyage. 32k input tokens |
 | `Qwen3-Embedding-8B` | 4096 | Open weights. The only entry here that can be both the best available and never leave the room |
-| `Qwen3-Embedding-4B` | 2560 | Half the memory for most of the quality; the one to start with on a single consumer GPU |
+| `Qwen3-Embedding-4B` | 2560 | **The floor.** Half the memory of the 8B for most of the quality; the one to start with on a single consumer GPU, and what memory and recall are tested against |
 
 **Dimensions cannot change under an existing store.** Vectors of different
 lengths are not comparable, so the store records what each was made with and
 refuses to compare across them — which means a changed model or a changed
 `ROOST_EMBED_DIMENSIONS` makes old memories unsearchable rather than wrong.
 That is the right failure, and it is worth knowing before you change either.
+
+It is worth knowing *twice* if you are moving up to the floor from something
+smaller, because that is a migration and not a setting change: existing
+memories do not convert, they stop being findable. Either accept that and let
+the store refill, or re-embed deliberately before switching. A floor is aimed
+precisely at installs sitting on an older default, so this is the likeliest
+moment for anyone to hit it.
 
 ### The asymmetric ones
 
@@ -174,6 +181,65 @@ it is scanning nothing and reporting success, which is indistinguishable from
 passing until the day it was meant to catch something.
 
 ## Choosing a model
+
+### The floor, and why it is a model *and* a tool budget
+
+**Chat: `qwen3.5:9b` or `gemma4:12b`. Embedding: `Qwen3-Embedding-4B`.**
+
+That is the minimum Roost's features are built and tested against — not the
+smallest thing that runs. Below it the agent loop does not get slower, it gets
+unreliable in ways that read as the harness being broken: a model that cannot
+hold a tool schema answers in prose where a tool call was needed, and a model
+that cannot hold the context loses the plan it just wrote.
+
+**The qualifier is load-bearing, so it goes in the same sentence as the number.**
+`gemma4:12b` did a five-step browser task — city, two dates, two guests,
+submit, read the results, report three hotels with correct prices — in twenty-
+six seconds, correct, first try. *With the tool list narrowed to `browser` and
+`web`, about ten tools.* Given the full set of roughly thirty, the same model
+on the same task with the same prompt opened the page and then reported that it
+had no way to browse.
+
+So "gemma4:12b is enough" is not a true statement on its own. **At the floor,
+the tool budget is part of the configuration**, which is why `POST
+/api/sessions` takes a `tools` list and `TOOLSETS` exists. A frontier model
+does not need the narrowing; a floor model does, and giving it everything is a
+way of putting it below the floor without changing the model.
+
+Two honesty notes on the evidence:
+
+* The measurements above are `gemma4:12b`. **There is no `qwen3.5:9b` data
+  here** — it is named as the floor because the other projects in this family
+  test against it, not because Roost has measured it.
+* Even narrowed, `gemma4:12b` is not enough for `autopilot`. Unattended it
+  wandered off task; the harness held — the loop guard stopped it, Stop
+  stopped it — but "fully autonomous" is a claim about the model as much as
+  about the harness. See the README.
+
+**The floor is a warning, never a wall.** Nothing here refuses a small model.
+If you want `qwen3:1.7b` on a 4 GB box to see how far it gets, that is yours to
+decide, and narrowing the toolset is the single thing that will help most. What
+the floor governs is what a **feature** may assume, not what an **operator** may
+run.
+
+### The ceiling: frontier models with thinking
+
+The other end is a first-class target rather than a happy accident, and it is
+the end Roost was designed around: an agent loop that plans, calls tools and
+recovers from its own mistakes is exactly the workload reasoning models are
+best at.
+
+* Reasoning is **streamed as its own channel**, not folded into the answer, and
+  the client renders it as working-out under the reply. A model that
+  deliberates for a minute before its first token is a supported shape.
+* **Nothing is gated on model size**, and no prompt is shortened for the floor.
+  A frontier model gets the same tools through the same guards.
+* The one place it is deliberately turned off is a **voice** call, where
+  reasoning is silence: `gemma4:12b` emitted 1,534 characters of thinking
+  before 276 of content, first content token at 7.8 seconds, so
+  sentence-at-a-time synthesis bought nothing. The agent path leaves it on.
+
+### How the default is picked
 
 If you name one, it is used. If you do not, the provider is asked and the
 first *usable* one is taken — which is not the same as the first one.

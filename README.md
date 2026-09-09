@@ -202,6 +202,75 @@ Purchases and credentials stay on their own axis — see
 [docs/AUTONOMY.md](docs/AUTONOMY.md), which is the page to read before running
 this unattended.
 
+## What this is built for
+
+### The floor: a model *and* a tool budget
+
+**Chat: `qwen3.5:9b` or `gemma4:12b`. Embedding: `Qwen3-Embedding-4B`.**
+
+What a feature is allowed to depend on, not what will start. Below it the agent
+loop does not slow down, it becomes unreliable in ways that look like the
+harness misbehaving: prose where a tool call was needed, a plan the model just
+wrote and has already lost.
+
+The number does not travel alone. `gemma4:12b` did the five-step booking task
+in twenty-six seconds, first try — **narrowed to about ten tools**. Given the
+full set of thirty-odd it opened the page and announced it had no way to
+browse. So at the
+floor the **tool budget is part of the configuration**, which is what
+`TOOLSETS` and the `tools` list on `POST /api/sessions` are for. Handing a
+floor model everything is a way of putting it below the floor without changing
+the model.
+
+Honest about the evidence: those measurements are `gemma4:12b`. `qwen3.5:9b` is
+named because the rest of this family tests against it, not because Roost has
+measured it. And even narrowed, a 12B is not enough for `autopilot` — see
+"What is not built yet".
+
+**A warning, never a wall.** Nothing refuses a small model. `qwen3:1.7b` on a
+4 GB box is yours to try, and narrowing the toolset is what will help most.
+The floor governs what a **feature** may assume, not what an **operator** may run.
+
+### The ceiling: frontier models with thinking
+
+The end Roost was actually designed around — planning, calling tools and
+recovering from its own mistakes is what reasoning models are best at.
+Reasoning streams as its own channel and renders as working-out under the
+reply; nothing is gated on model size; no prompt is shortened for the floor.
+The single exception is a voice call, where reasoning is silence and `think` is
+sent off deliberately.
+
+### Where it runs: not a thin client
+
+Roost installs like `claude-code` or `codex` — a daemon on the machine you want
+worked on, reached from a browser. **The model may be remote. The agent is
+not.** It runs shell with a risk classifier, edits files, drives a real
+Chromium, and optionally sees the screen and moves the mouse — all on the host
+it is installed on, whichever machine the tokens come from. `ROOST_WORKSPACE`,
+the approval modes and `ROOST_UNCONFINED` are all about *that* box.
+
+Worth being blunt about, because "points at a remote AI box" invites the
+reading that the local install is just a UI. It is not, and somewhere you would
+not put an agent is not somewhere to put this.
+
+Two shapes follow:
+
+**Models elsewhere.** A strong machine running Roost, models on a separate AI
+box (Perch, an Ollama on the LAN) or a provider API. Best answers, and the
+local box spends nothing on inference. This is the common case and it is what
+`ROOST_LOCAL_ONLY` exists to *constrain* — set it and a hosted provider is an
+error at route resolution, never a quiet fallback.
+
+**Everything on one box, 16 GB+.** One machine, local models only, nothing
+leaving the room: Ollama, whisper, Kokoro, the vector store and the daemon
+together. Supported, and 16 GB is a real floor rather than a comfortable one —
+a floor chat model is ~6 GB resident, `Qwen3-Embedding-4B` ~2.5 GB, whisper
+`base` plus Kokoro ~1.9 GB, the daemon and store ~1 GB: about 11.5 GB with
+everything warm. Headroom on 16 GB, none at all on 8. Voice is the first thing
+to drop, and the browser and desktop extras are the next — they are separate
+installs (`[browser]`, `[desktop]`) precisely so a small box need not carry
+them.
+
 ## Verified against real hardware
 
 Everything above has been run end to end against a live Perch — all five
@@ -224,7 +293,7 @@ And the newer half, on the same machine:
 
 | | |
 |---|---|
-| booking | `gemma4:12b` opened a hotel site in a real Chromium, typed a city and two dates, submitted the form, read the results and reported three hotels with correct prices — **26 s**, first try |
+| booking | `gemma4:12b` opened a hotel site in a real Chromium, typed a city and two dates, submitted the form, read the results and reported three hotels with correct prices — **26 s**, first try, with the toolset narrowed to `browser` + `web`. Given all thirty-odd tools the same run failed outright, so the narrowing is part of the result rather than a detail of it |
 | your mouse | throughout that, on a virtual stage, the real display's pointer did not move. The test asserts it |
 | the real web | the same browser, on the same private display, loaded google.com and found its twenty interactive elements |
 | autopilot | a goal, a live view at ~1.4 fps, 27 JPEG frames in 19 s, and a Stop button that stopped it |
