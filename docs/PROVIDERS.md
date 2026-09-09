@@ -164,6 +164,15 @@ block marked `# transport-exempt: <why>` is how a genuine exception says so,
 and a second test refuses a reason too short to review: an exemption nobody
 can check is one the next reader assumes was load-bearing.
 
+It reads the syntax tree rather than grepping the text, because a regex also
+matches the words in a comment explaining why something *cannot* be done, and
+a check that cries wolf gets deleted rather than fixed. And a third test
+asserts the guard can still see — that the package is where it thinks it is,
+that it scanned a plausible number of files, and that it found the calls that
+are certainly there. The failure mode of a check like this is not being wrong;
+it is scanning nothing and reporting success, which is indistinguishable from
+passing until the day it was meant to catch something.
+
 ## Choosing a model
 
 If you name one, it is used. If you do not, the provider is asked and the

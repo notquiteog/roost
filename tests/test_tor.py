@@ -9,7 +9,7 @@ so — only something that does not work.
 
 from __future__ import annotations
 
-import re
+import ast
 from pathlib import Path
 
 import pytest
@@ -113,20 +113,58 @@ def test_a_tor_transport_says_where_it_goes():
 
 
 # Every way this codebase has of opening an outbound connection. Wider than
-# aiohttp on purpose: the guard is worth nothing if adding `httpx` to reach a
-# model server is the way around it.
-_OPENS_A_CONNECTION = re.compile(
-    r'aiohttp\.ClientSession\s*\(|aiohttp\.request\s*\(|'
-    r'\bhttpx\.(?:Client|AsyncClient|get|post|put|delete|request)\s*\(|'
-    r'\brequests\.(?:get|post|put|delete|request|Session)\s*\(|'
-    r'\burlopen\s*\('
-)
+# aiohttp on purpose: a guard you can step around by importing httpx is not a
+# guard.
+_OPENS_A_CONNECTION = {
+    'aiohttp.ClientSession',
+    'aiohttp.request',
+    'httpx.Client',
+    'httpx.AsyncClient',
+    'httpx.get',
+    'httpx.post',
+    'httpx.put',
+    'httpx.delete',
+    'httpx.request',
+    'requests.Session',
+    'requests.get',
+    'requests.post',
+    'requests.put',
+    'requests.delete',
+    'requests.request',
+    'urlopen',
+    'urllib.request.urlopen',
+}
 
 _EXEMPT = 'transport-exempt:'
 
 # An exemption nobody can review is one the next reader assumes was
 # load-bearing. Short enough to write in passing, long enough to be a reason.
 _MIN_REASON = 25
+
+# What the scan must find to be believed. See the vacuity test below: the
+# failure mode of a check like this is not being wrong, it is looking at
+# nothing and reporting success.
+_MIN_FILES = 30
+_MIN_CALLS = 3
+
+
+def _package_root() -> Path:
+    root = Path(__file__).resolve().parent.parent / 'roost'
+    assert root.is_dir(), f'the package is not where this test thinks it is: {root}'
+    return root
+
+
+def _dotted(node: ast.AST) -> str:
+    """`aiohttp.ClientSession` from the call's func expression, or ''."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+    else:
+        return ''
+    return '.'.join(reversed(parts))
 
 
 def _exemption_for(lines: list[str], index: int) -> str | None:
@@ -137,7 +175,8 @@ def _exemption_for(lines: list[str], index: int) -> str | None:
     block matters: every reason worth writing here ran to three or four
     sentences, and a rule that forces those onto one line is a rule that
     produces worse reasons. Stopping at the first non-comment line is what
-    keeps a comment attached to something else from exempting a call below it.
+    keeps a comment attached to something else — the function above, say —
+    from exempting a call below it.
     """
     candidates = [lines[index]]
     for above in range(index - 1, -1, -1):
@@ -153,15 +192,54 @@ def _exemption_for(lines: list[str], index: int) -> str | None:
 
 
 def _outbound_calls():
-    """(file, line number, text, exemption) for everything that opens a socket."""
-    root = Path(__file__).resolve().parent.parent / 'roost'
+    """(file, line, text, exemption) for everything that opens a socket.
+
+    Parsed rather than grepped. A regex over source text matches the words in
+    a comment explaining why something cannot be done, or in a docstring
+    describing the bug this guard exists to prevent — and a check that cries
+    wolf is one that gets deleted rather than fixed. The syntax tree contains
+    only what the file actually *does*.
+    """
+    root = _package_root()
+    scanned = 0
     for path in sorted(root.rglob('*.py')):
-        lines = path.read_text().splitlines()
-        for index, line in enumerate(lines):
-            if not _OPENS_A_CONNECTION.search(line):
+        source = path.read_text()
+        lines = source.splitlines()
+        scanned += 1
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError as exc:  # pragma: no cover - would fail the suite anyway
+            raise AssertionError(f'{path} does not parse: {exc}') from exc
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or _dotted(node.func) not in _OPENS_A_CONNECTION:
                 continue
+            index = node.lineno - 1
             rel = path.relative_to(root.parent)
-            yield rel, index + 1, line.strip(), _exemption_for(lines, index)
+            yield rel, node.lineno, lines[index].strip(), _exemption_for(lines, index)
+
+    assert scanned >= _MIN_FILES, (
+        f'only {scanned} python files were scanned, which is not this package — '
+        'the guard is looking in the wrong place and would pass by having nothing to check'
+    )
+
+
+def test_the_guard_is_actually_looking_at_something():
+    """The failure mode of a check like this is not being wrong. It is being
+    vacuous — scanning an empty directory, or matching nothing because the
+    pattern broke — and reporting success, which is indistinguishable from
+    passing right up until the day it was meant to catch something.
+
+    So the guard has to prove it can still see: the package is where it thinks
+    it is, it scanned a plausible number of files, and it found the calls that
+    are definitely there.
+    """
+    found = list(_outbound_calls())
+    assert len(found) >= _MIN_CALLS, (
+        f'the scan found only {len(found)} outbound calls in a package that certainly has '
+        'more — the match set has probably stopped matching, and every check below it is '
+        'passing on an empty list'
+    )
 
 
 def test_nothing_opens_its_own_connection_without_saying_why():
@@ -174,12 +252,10 @@ def test_nothing_opens_its_own_connection_without_saying_why():
     is strictly worse than not having the feature, because the operator
     believes they are on Tor.
 
-    A grep, deliberately, rather than a mock: the failure is a *line of code*
-    that bypasses the transport, and the only reliable way to catch the next
-    one is to look for it. It covers the whole package rather than the
-    adapters, because the other shape of this bug is a call that never went
-    near an adapter at all — an evaluation helper, a health check, a token
-    counter — reaching a model server on a bare client.
+    It covers the whole package rather than the adapters, because the other
+    shape of this bug is a call that never went near an adapter at all — an
+    evaluation helper, a health check, a token counter — reaching a model
+    server on a bare client.
     """
     offenders = [
         f'{path}:{number}: {text}'
