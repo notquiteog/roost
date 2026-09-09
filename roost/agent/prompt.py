@@ -90,6 +90,35 @@ config" after an edit that failed is the single most damaging thing you can \
 say."""
 
 
+# What to say about each capability, when a session has it. Said plainly and
+# in the first person, because a small model that is merely *given* browser
+# tools will still tell you it cannot browse the internet — observed on a 12B
+# model that had just successfully opened a page with the tool it was denying
+# having. Listing what is attached costs a few dozen tokens and stops the
+# model arguing with its own tool list.
+CAPABILITY_LINES = {
+    'browser': (
+        'You have a real web browser. `browser_navigate` opens a page, `browser_read` lists '
+        'what is on it and numbers the things you can click, and `browser_click` and '
+        '`browser_type` act on those numbers. It is a real browser on the real internet — '
+        'when you need something from the web, use it rather than saying you cannot.'
+    ),
+    'desktop': (
+        'You can see and use a screen: `desktop_screenshot` shows it to you, and '
+        '`desktop_click`, `desktop_type` and `desktop_scroll` act on it. The first '
+        'screenshot also tells you how big it is and whether it is your own screen or '
+        'the one the person is looking at.'
+    ),
+    'media': (
+        'You can generate images and video. Ask `media_params` what the backend can be told '
+        'before setting anything beyond a prompt.'
+    ),
+    'memory': (
+        'You remember things between conversations, through `remember` and `recall`.'
+    ),
+}
+
+
 def build(
     root: Path,
     *,
@@ -97,9 +126,18 @@ def build(
     cwd: Path | None = None,
     extra: str = '',
     confined: bool = True,
+    capabilities: list[str] | None = None,
 ) -> str:
     """Assemble the prompt for one session."""
-    parts = [BASE, '\n## This machine\n']
+    parts = [BASE]
+
+    if capabilities:
+        lines = [CAPABILITY_LINES[c] for c in capabilities if c in CAPABILITY_LINES]
+        if lines:
+            parts.append('\n## What you have here\n')
+            parts.append('\n\n'.join(lines))
+
+    parts.append('\n## This machine\n')
     if confined:
         parts.append(f'Working root: {root}   (you cannot read or write outside this)')
     else:

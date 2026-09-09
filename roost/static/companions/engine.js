@@ -86,7 +86,6 @@ const TOOL_STATES = {
   desktop_type: 'desktop',
   desktop_key: 'desktop',
   desktop_scroll: 'desktop',
-  desktop_stage: 'desktop',
   // Generation is a long wait on somebody else's GPU, which is what
   // 'running' already means here. It gets its own word in the caption rather
   // than its own animation: a sixth state would need frames drawing in five

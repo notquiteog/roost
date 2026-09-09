@@ -341,6 +341,21 @@
     <label>Provider
       <select name="provider"><option value="">first that can do chat</option></select>
     </label>
+    <label>Tools
+      <select name="tools">
+        <option value="">everything it has</option>
+        <option value="files,shell,plan,web">code — files, commands, the web</option>
+        <option value="browser,web">the web — a real browser, search, research</option>
+        <option value="browser,desktop">the screen — browser and desktop control</option>
+        <option value="files,plan">files only — no commands, no network</option>
+        <option value="media">making things — images and video</option>
+      </select>
+    </label>
+    <p class="explain">
+      A long tool list costs a small model accuracy: a 12B model given every tool failed a
+      five-step browser task that it finished in twenty-six seconds with only the browser
+      ones. Leave this alone on a large model.
+    </p>
     <label>Approval
       <select name="mode">
         <option value="read_only">read only — nothing that changes anything</option>

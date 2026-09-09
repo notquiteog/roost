@@ -133,3 +133,40 @@ the human but never sent it to the model, which then described the screen
 fluently and entirely wrongly. `display` is what the UI renders; `images` is
 what the model receives; they are separate fields precisely so that failure
 cannot recur silently.
+
+---
+
+## Running unattended, on a screen
+
+Autopilot is the mode where the questions on this page stop being theoretical:
+there is a goal, there is a screen, and there is nobody answering. Four things
+are worth knowing before you start one.
+
+**It refuses to take your screen unless you say so in words.** The check
+happens before anything moves, so "this would take your mouse" is something
+you are told rather than something you discover when the cursor jumps. Without
+Xvfb installed there is no screen it can have to itself, and the run is
+refused rather than quietly borrowing yours.
+
+**The approval policy is the same one.** There is no separate autopilot mode
+in the policy and there must not be — the temptation to add one is exactly how
+an agent ends up with permissions nobody granted it, in a mode nobody was
+watching. What autopilot changes is the *prompt*: it is told to finish rather
+than to check in. `trusted` is the honest default for it, and it still stops
+for anything destructive, for money and for secrets.
+
+**Money still stops.** Being unattended does not relax that; it makes it more
+important. A run that reaches a checkout page waits, indefinitely, for a
+person — and if nobody comes, nothing is bought.
+
+**`ask_user` is still there, and the prompt tells it to use it.** A genuinely
+stuck agent — a login it cannot complete, a choice only you can make — should
+suspend rather than guess. Guessing at an irreversible step on somebody's
+behalf is worse than waiting until they are back.
+
+The honest limit is the model. A 12B model completes a five-step browser task
+reliably when the tool list is narrowed to what it needs, and wanders when it
+is not; unattended, with nobody to correct it, it wandered off the task
+entirely. The harness held — the loop guard stopped it, the frames kept
+streaming, Stop stopped it — but "fully autonomous" is a claim about the model
+as much as about the harness. Narrow the toolset, and watch the first few.

@@ -99,6 +99,11 @@ _SECRET_NAME = re.compile(
 )
 
 
+# Input types that are several little boxes wearing one border. Keystrokes go
+# to whichever segment has focus, so these are set rather than typed.
+SEGMENTED_INPUTS = frozenset({'date', 'time', 'datetime-local', 'month', 'week', 'color', 'range'})
+
+
 def classify_click(element: dict[str, Any]) -> tuple[Risk, str]:
     """What clicking this element commits you to."""
     label = normalise(' '.join(
@@ -140,6 +145,10 @@ def _render(elements: list[dict[str, Any]]) -> str:
 
 
 class _BrowserTool(Tool):
+    # Set once a signed-out session has been mentioned, so it is said on the
+    # first page rather than on every one.
+    _warned_signed_out = False
+
     def __init__(self, browser: Any) -> None:
         self.browser = browser
 
@@ -179,10 +188,24 @@ class BrowserNavigateTool(_BrowserTool):
             raise ToolError(f'could not open {args["url"]}: {exc}') from exc
 
         elements = await self.browser.elements()
+
+        # Said once, on the first page of a session that had to take a fresh
+        # profile. Without it the agent meets a login wall and reports the
+        # site as broken, having no way to know it is signed out — and then
+        # tries to sign in, which is the one thing it must not do.
+        note = ''
+        if not self.browser.signed_in_profile and not self._warned_signed_out:
+            self._warned_signed_out = True
+            note = (
+                '\n\nNote: another session is using the signed-in browser profile, so this '
+                'one is a fresh browser and you are not logged in to anything. If a site '
+                'asks you to sign in, do not try — say so and use browser_hand_over.'
+            )
+
         return Output(
             content=f'Opened {page.url}\nTitle: {await page.title()}\n\n{len(elements)} interactive elements. '
-                    'Use browser_read to see the page.',
-            display={'url': page.url},
+                    f'Use browser_read to see the page.{note}',
+            display={'url': page.url, 'signed_in': self.browser.signed_in_profile},
         )
 
 
@@ -319,9 +342,32 @@ class BrowserTypeTool(_BrowserTool):
         try:
             locator = await self.browser.find(args['ref'])
             await locator.scroll_into_view_if_needed(timeout=5000)
-            if args.get('clear', True):
-                await locator.fill('')
-            await locator.type(args['text'], delay=25)
+
+            # Which of the two ways to put text in a field. It is not a
+            # preference, and getting it wrong is not subtle:
+            #
+            # Keystrokes are right for ordinary text, because that is what an
+            # autocomplete listens for — a city box that filters as you type
+            # sees `fill()` as one event and often ignores it entirely, which
+            # leaves the agent looking at a dropdown that never opened.
+            #
+            # Keystrokes are *wrong* for the segmented inputs. A date field is
+            # three little boxes wearing one border, and sending it "2026-10-14"
+            # feeds those characters to whichever segment has focus: measured
+            # here, that produced 61014-02-02 — a date the form accepted, the
+            # results page echoed back, and nobody would notice until the
+            # booking was for the wrong week.
+            kind = (await locator.evaluate('el => (el.type || "").toLowerCase()')) or ''
+            segmented = kind in SEGMENTED_INPUTS
+
+            if segmented:
+                await locator.fill(args['text'])
+            else:
+                if args.get('clear', True):
+                    await locator.fill('')
+                await locator.type(args['text'], delay=25)
+
+            was_at = page.url
             if args.get('submit'):
                 await locator.press('Enter')
                 await page.wait_for_timeout(900)
@@ -330,7 +376,39 @@ class BrowserTypeTool(_BrowserTool):
         except Exception as exc:  # noqa: BLE001
             raise ToolError(f'could not type into element {args["ref"]}: {exc}') from exc
 
-        return Output(content=f'Typed. The page is now {page.url}', display={'url': page.url})
+        # Read back, so a field that silently rejected or reformatted what was
+        # sent is caught here rather than three steps later — a date input that
+        # will not take a value comes back empty, and an agent that believes it
+        # set a date will book the wrong week.
+        #
+        # Only when the page is still the page, though. Submitting navigates,
+        # and reading a field on the *next* page finds it empty and reports a
+        # failure for something that worked perfectly: measured against a real
+        # model, which was told its check-in date had not been accepted while
+        # the URL it had just been given contained that exact date.
+        moved = page.url != was_at
+        landed = ''
+        if not moved:
+            try:
+                landed = await locator.input_value(timeout=2000)
+            except Exception:  # noqa: BLE001 - not every element has a value
+                landed = ''
+
+            if segmented and landed != args['text']:
+                raise ToolError(
+                    f'the field would not take {args["text"]!r} — it now reads {landed!r}. '
+                    f'It is an <input type="{kind}">, so it wants exactly the format that kind '
+                    'of field takes: YYYY-MM-DD for a date, HH:MM for a time.'
+                )
+
+        if moved:
+            note = ' Pressing Enter submitted the form, so the page has changed — read it again.'
+        else:
+            note = f' It now reads {landed!r}.' if landed else ''
+        return Output(
+            content=f'Typed.{note} The page is now {page.url}',
+            display={'url': page.url, 'value': landed, 'navigated': moved},
+        )
 
 
 class BrowserAskHumanTool(_BrowserTool):

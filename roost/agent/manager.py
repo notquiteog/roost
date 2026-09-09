@@ -51,6 +51,7 @@ class SessionManager:
         memory: Any = None,
         user_id: str = '',
         media: Any = None,
+        toolset: list[str] | None = None,
         cfg: Any = None,
     ) -> AgentSession:
         from roost.config import config as default_config
@@ -120,6 +121,7 @@ class SessionManager:
             browser=browser,
             stage=stage,
             media=media,
+            toolset=toolset,
         )
         self._sessions[session.id] = session
         await session.start()

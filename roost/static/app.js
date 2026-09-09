@@ -274,7 +274,6 @@ const VERBS = {
   desktop_type: 'Typed',
   desktop_key: 'Pressed',
   desktop_scroll: 'Scrolled',
-  desktop_stage: 'Checked the screen',
   media_params: 'Checked what it can tune',
   generate_image: 'Generated',
   generate_video: 'Started rendering',
@@ -1225,6 +1224,7 @@ async function createSession(form) {
     model: form.model.value.trim() || null,
     provider: form.provider.value || null,
     mode: form.mode.value,
+    tools: form.tools.value ? form.tools.value.split(',') : [],
   };
   const res = await api('/api/sessions', {
     method: 'POST',

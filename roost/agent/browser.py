@@ -17,6 +17,16 @@ there now, which on a checkout page is exactly the wrong failure mode.
 
 **One browser per agent session.** Two sessions sharing a page would fight
 over navigation, and a page's state is part of the conversation's state.
+
+That last point has a consequence that took a second session to notice.
+Chromium locks a profile directory, so the *second* session to open a browser
+cannot have the signed-in one — and since sessions outlive their client here,
+"the second session" includes one somebody left open yesterday. Failing would
+be wrong (the answer to "look something up" should not be "close your other
+tab"), and silently sharing is impossible. So the second one gets a fresh
+profile, and is *told* it is not signed in to anything — because an agent that
+does not know it is logged out will read a login wall as the site being
+broken.
 """
 
 from __future__ import annotations
@@ -24,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -110,6 +121,11 @@ class BrowserSession:
         self._context: Any = None
         self._page: Any = None
         self._lock = asyncio.Lock()
+        # False once this session has had to fall back to a throwaway profile
+        # because another one holds the signed-in one. Read by the tools, so
+        # the model is told rather than left to work it out from a login page.
+        self.signed_in_profile = True
+        self._temp_profile: Any = None
         # What the last read saw, keyed by ref. The click and type tools grade
         # their risk from this without awaiting, which they must: `assess` is
         # synchronous by design, so that an approval decision cannot itself
@@ -135,18 +151,30 @@ class BrowserSession:
                 # A persistent context rather than launch()+new_context(): it is
                 # what keeps cookies, logins and local storage across runs.
                 launch: dict[str, Any] = {
-                    'user_data_dir': str(self.config.profile_dir),
                     'headless': self.config.headless,
                     'viewport': {'width': width, 'height': height},
                     'user_agent': self.config.user_agent,
                     'args': ['--disable-blink-features=AutomationControlled'],
                 }
+                launch['user_data_dir'] = str(await self._profile_dir())
                 if self.config.env:
                     # Inherited and overlaid rather than replaced: a bare
                     # environment loses PATH, HOME and the XDG variables, and
                     # Chromium fails to start in ways that read as a Playwright
                     # bug rather than as a missing variable.
-                    launch['env'] = {**os.environ, **self.config.env}
+                    #
+                    # An empty value means remove. That is how a stage says
+                    # "there is no Wayland here" — and it has to be able to,
+                    # because Chromium prefers Wayland when it finds it and
+                    # would put its window on the screen the person is using
+                    # while the agent screenshots an empty X display.
+                    merged = {**os.environ, **self.config.env}
+                    launch['env'] = {k: v for k, v in merged.items() if v != ''}
+                    if self.config.env.get('DISPLAY'):
+                        # Told rather than inferred. Chromium's own detection
+                        # reads the environment we have just edited, and being
+                        # explicit costs nothing and removes a guess.
+                        launch['args'] = [*launch['args'], '--ozone-platform=x11']
                 self._context = await self._pw.chromium.launch_persistent_context(**launch)
                 self._context.set_default_timeout(self.config.timeout_ms)
 
@@ -160,6 +188,31 @@ class BrowserSession:
             self._page.on('framenavigated', lambda frame: self.last_elements.clear()
                           if frame == self._page.main_frame else None)
             return self._page
+
+    async def _profile_dir(self) -> Path:
+        """The shared profile, or a throwaway when something else holds it.
+
+        Chromium's lock is a file in the directory and it is not advisory —
+        launching against a locked profile fails with a message about "an
+        existing browser session", which reads like a bug in this program.
+        Checking first and stepping aside turns that into a fact the agent can
+        work with.
+        """
+        import tempfile
+
+        shared = self.config.profile_dir
+        shared.mkdir(parents=True, exist_ok=True)
+
+        # `SingletonLock` is a symlink Chromium leaves while a profile is in
+        # use, and removes on a clean exit. A stale one after a crash points
+        # at a pid that is gone, so it is checked rather than trusted.
+        lock = shared / 'SingletonLock'
+        if _profile_is_busy(lock):
+            self.signed_in_profile = False
+            self._temp_profile = tempfile.mkdtemp(prefix='roost-browser-')
+            log.info('the signed-in browser profile is in use; this session gets a fresh one')
+            return Path(self._temp_profile)
+        return shared
 
     async def elements(self) -> list[dict[str, Any]]:
         page = await self.page()
@@ -192,3 +245,35 @@ class BrowserSession:
             log.debug('browser teardown was not clean', exc_info=True)
         finally:
             self._pw = self._context = self._page = None
+            if self._temp_profile:
+                # A throwaway profile is exactly that: it holds whatever was
+                # signed into during this session and nothing anyone asked to
+                # keep, and it is a few hundred megabytes.
+                shutil.rmtree(self._temp_profile, ignore_errors=True)
+                self._temp_profile = None
+
+
+def _profile_is_busy(lock: Path) -> bool:
+    """Whether a Chromium is currently holding this profile.
+
+    The lock is a symlink whose target is `<host>-<pid>`. A crashed Chromium
+    leaves one behind pointing at a pid that no longer exists, and treating
+    that as busy would mean every session after a crash silently loses its
+    logins — so the pid is checked.
+    """
+    try:
+        target = os.readlink(lock)
+    except OSError:
+        return False
+
+    pid = target.rsplit('-', 1)[-1]
+    if not pid.isdigit():
+        return True
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Somebody else's process, which is still a process holding it.
+        return True
+    return True

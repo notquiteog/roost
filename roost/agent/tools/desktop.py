@@ -101,17 +101,36 @@ class DesktopScreenshotTool(_DesktopTool):
         except StageUnavailable as exc:
             raise ToolError(str(exc)) from exc
 
+        first = self.state.get('last_shot') is None and not self.state.get('explained')
         self.state['last_shot'] = time.monotonic()
+        self.state['explained'] = True
 
         encoded = base64.b64encode(png).decode()
-        where = (
-            'a display of its own — the person can keep using their mouse'
-            if not self.stage.shares_pointer
-            else 'the screen the person is looking at'
-        )
+
+        # Whose screen this is, said on the first look. It used to be its own
+        # tool, which was a mistake twice over: the screenshot already knows
+        # both facts, and a zero-argument tool that returns the same sentence
+        # every time turned out to be what a confused model reaches for —
+        # measured at thirty consecutive calls on a 12B model that had lost
+        # the thread. Fewer tools, same information.
+        if not self.stage.shares_pointer:
+            where = (
+                'a display of your own. Nothing you do here touches the person\'s mouse, '
+                'keyboard or windows — they watch through these screenshots. Applications '
+                'you start from the shell appear here.'
+            )
+        else:
+            where = (
+                'the screen the person is looking at, and you share their pointer. Moving '
+                'it moves theirs. Say what you are about to do before you do it, and if a '
+                'click is refused because the pointer moved, that is them using their own '
+                'computer — stop and ask.'
+            )
+
         return Output(
-            content=f'Screenshot taken: {rect.width}x{rect.height}, on {where}. '
-                    'Coordinates are in pixels from the top-left of the image below.',
+            content=f'Screenshot taken: {rect.width}x{rect.height}. '
+                    'Coordinates are in pixels from the top-left of the image below.'
+                    + (f'\n\nThis is {where}' if first else ''),
             display={
                 'image': encoded,
                 'media_type': 'image/png',
@@ -309,43 +328,10 @@ class DesktopScrollTool(_DesktopTool):
         return Output(content=f'Scrolled {args["amount"]} clicks. Take a screenshot to see the result.')
 
 
-class DesktopStageTool(_DesktopTool):
-    name = 'desktop_stage'
-    description = (
-        'Ask where you are working: how big the screen is, and whether it is a display of '
-        'your own or the one the person is looking at. Worth knowing before you start — on '
-        'a shared screen you are sharing their mouse and should say so before taking it.'
-    )
-    input_schema = {'type': 'object', 'properties': {}}
-
-    def assess(self, args: dict[str, Any], ctx: ToolContext) -> Assessment:
-        return Assessment(risk=Risk.READ, summary='ask about the screen')
-
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
-        info = self.stage.describe()
-        if info['shares_pointer']:
-            note = (
-                'This is the screen the person is looking at, and you share their pointer. '
-                'Moving it moves theirs. Say what you are about to do before you do it, and '
-                'if a click is refused because the pointer moved, that is them using their '
-                'own computer — stop and ask.'
-            )
-        else:
-            note = (
-                'This is a display of your own. Nothing you do here touches the person\'s '
-                'mouse, keyboard or windows; they watch through the screenshots you take. '
-                'Applications you start from the shell appear here.'
-            )
-        return Output(
-            content=f'{info["width"]}x{info["height"]}, {info["kind"]} stage.\n{note}',
-            display=info,
-        )
-
 
 def desktop_tools(stage: Stage) -> list[Tool]:
     state: dict[str, Any] = {}
     return [
-        DesktopStageTool(stage, state),
         DesktopScreenshotTool(stage, state),
         DesktopClickTool(stage, state),
         DesktopTypeTool(stage, state),

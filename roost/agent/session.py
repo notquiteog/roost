@@ -75,6 +75,21 @@ MAX_STEPS = 60
 # How many events one session keeps for replay. Roughly an afternoon of work.
 EVENT_LOG_LIMIT = 5000
 
+# How many times one turn may make the *same* call with the *same* arguments
+# before it is told, and then stopped.
+#
+# Repeats are not automatically wrong: a screenshot taken twice is two
+# different pictures, and running the tests again after an edit is the whole
+# point. So the first few are left alone. What this catches is the other
+# thing — a model that has lost the thread and is calling something with no
+# side effects over and over, which a step limit only catches after sixty
+# rounds. Measured on a 12B model asked to browse: thirty identical calls to
+# a tool that reports the screen size, 59,000 tokens of input, and an answer
+# saying it could not browse. The nudge at REPEAT_WARN is usually enough;
+# REPEAT_STOP is for when it is not.
+REPEAT_WARN = 3
+REPEAT_STOP = 6
+
 
 def _denial_text(call: ToolCall, reason: str) -> str:
     """What the model is told when a person says no.
@@ -175,6 +190,10 @@ class AgentSession:
         self._seq = 0
         self._subs: set[asyncio.Queue[tuple[int, Any]]] = set()
         self.last_active: float = time.time()
+
+        # (tool, arguments) -> how many times this turn has made that call.
+        # Emptied per turn: a repeat across turns is a person asking twice.
+        self._repeats: dict[str, int] = {}
 
         self._approvals: dict[str, asyncio.Future[tuple[bool, str, bool]]] = {}
         self._questions: dict[str, asyncio.Future[str]] = {}
@@ -360,6 +379,8 @@ class AgentSession:
             # Fire and forget: this is bookkeeping, not part of the answer.
             asyncio.create_task(self._safe_learn(text))
 
+        self._repeats = {}
+
         blocks: list[Any] = [TextBlock(text=text)]
         for att in attachments:
             if att.get('type') == 'image' and att.get('data'):
@@ -536,6 +557,20 @@ class AgentSession:
         call.risk = assessment.risk
         call.summary = assessment.summary
 
+        stuck, why_stuck = self._note_repeat(call)
+        if stuck is not None:
+            # Announced as a proposal that was then refused, rather than
+            # returned silently. A client that is only shown the model's own
+            # words sees a turn go quiet for no reason; this way the loop is
+            # visible in the transcript as the thing that stopped it.
+            await self._emit(
+                ToolProposed(session_id=self.id, turn_id=turn_id, call=call, needs_approval=False)
+            )
+            await self._emit(
+                ToolDenied(session_id=self.id, turn_id=turn_id, call_id=call.id, reason=why_stuck)
+            )
+            return stuck
+
         decision, why = self.policy.decide(call)
 
         if decision is Decision.DENY:
@@ -607,6 +642,49 @@ class AgentSession:
         )
         self._pending_images.extend(images)
         return ToolResultBlock(tool_use_id=call.id, content=content, is_error=not ok)
+
+    def _note_repeat(self, call: ToolCall) -> tuple[ToolResultBlock | None, str]:
+        """Count identical calls, and eventually stop one.
+
+        The result it gets back is the intervention: a model that is told, in
+        the place it is already reading, that it has now asked the same
+        question six times usually stops. Ending the turn instead would throw
+        away everything it had got right up to that point.
+        """
+        import hashlib
+        import json as _json
+
+        fingerprint = hashlib.sha256(
+            _json.dumps({'n': call.name, 'a': call.arguments}, sort_keys=True, default=str).encode()
+        ).hexdigest()[:16]
+        seen = self._repeats[fingerprint] = self._repeats.get(fingerprint, 0) + 1
+
+        if seen < REPEAT_WARN:
+            return None, ''
+
+        if seen >= REPEAT_STOP:
+            log.info('session %s: stopping a repeated %s call (%d times)', self.id, call.name, seen)
+            call.status = ToolStatus.DENIED
+            return ToolResultBlock(
+                tool_use_id=call.id,
+                content=(
+                    f'You have now called {call.name} with exactly these arguments {seen} times in '
+                    'this turn, and it was not run again. Nothing has changed between those calls, '
+                    'so it would return what it returned before.\n\n'
+                    'You are stuck in a loop. Stop repeating this call. Either do something '
+                    'different with what you already have, or — if you genuinely cannot make '
+                    'progress — say so plainly to the person and stop. If you do not know which '
+                    'tool to use, read the tool descriptions again rather than trying this one '
+                    'once more.'
+                ),
+                is_error=True,
+            ), f'the same call {seen} times in one turn — it is looping'
+
+        # Run it, but say so. A screenshot taken three times is three real
+        # pictures, so this is a note attached to a result rather than a
+        # refusal — the caller's own output is preserved after it.
+        call.summary = f'{call.summary} (call {seen} of the same thing)'
+        return None, ''
 
     # -- suspension points --------------------------------------------------
 

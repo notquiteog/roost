@@ -342,7 +342,20 @@ class XStage(Stage):
         return self._region
 
     def env(self) -> dict[str, str]:
-        return {'DISPLAY': self.display}
+        """Environment for an application that should appear *here*.
+
+        Setting DISPLAY is not enough on a Wayland desktop, and the failure is
+        the one this whole file is written to avoid: a toolkit that finds
+        WAYLAND_DISPLAY set prefers it, connects to the compositor the person
+        is actually using, and puts its window on their screen. The agent then
+        screenshots its own empty X display, gets a black rectangle, and
+        describes it — while the browser it thinks it is driving is sitting on
+        top of somebody's work.
+
+        So the two Wayland variables are cleared as well. An empty value here
+        means *remove*, which is what the launcher does with it.
+        """
+        return {'DISPLAY': self.display, 'WAYLAND_DISPLAY': '', 'XDG_SESSION_TYPE': 'x11'}
 
     # -- looking ------------------------------------------------------------
 

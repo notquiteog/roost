@@ -3,6 +3,14 @@
 Everything is optional and nothing is a secret in code. A provider with no
 key is simply not registered, which is why an install with only Perch
 configured is a complete install rather than a broken one.
+
+A `.env` beside the project is read first, if there is one. That is what the
+README has always told people to do — `cp .env.example .env`, edit it, run —
+and until this was here it did nothing at all: the file was written, the
+daemon started with none of it, and the symptom was "no providers configured"
+next to a file that plainly configures several. Real environment variables
+still win, so a shell that exports something overrides the file rather than
+being overridden by it.
 """
 
 from __future__ import annotations
@@ -13,6 +21,40 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+def _load_dotenv() -> None:
+    """Read a .env from the working directory, or wherever ROOST_ENV says.
+
+    Deliberately not a dependency. python-dotenv arrives with uvicorn on most
+    installs and is absent on some, and the format that matters here is
+    KEY=value with optional quotes and # comments — twenty lines rather than a
+    package that might not be there.
+    """
+    path = Path(os.getenv('ROOST_ENV') or '.env')
+    if not path.is_file():
+        return
+    try:
+        text = path.read_text(encoding='utf-8')
+    except OSError as exc:
+        log.warning('could not read %s: %s', path, exc)
+        return
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, _, value = line.partition('=')
+        key = key.strip().removeprefix('export ').strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in '\'"':
+            value = value[1:-1]
+        # The environment wins. Someone who exported a variable to override
+        # the file for one run should get the override, not the file.
+        os.environ.setdefault(key, value)
+
+
+_load_dotenv()
 
 
 def _bool(name: str, default: bool = False) -> bool:

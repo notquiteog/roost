@@ -283,10 +283,23 @@ class ImportWorkflowTool(_MediaTool):
 
 
 def media_tools(service: Any) -> list[Tool]:
-    return [
-        MediaParamsTool(service),
-        GenerateImageTool(service),
-        GenerateVideoTool(service),
-        MediaJobTool(service),
-        ImportWorkflowTool(service),
-    ]
+    """The generation tools this install can actually serve.
+
+    Nothing is offered that would fail on its first call. An install with a
+    diffusion server and no video backend gets `generate_image` and not
+    `generate_video`; one with neither gets none of this at all, and the model
+    is never told it can make pictures on a machine that cannot.
+    """
+    kinds = service.can_generate()
+    if not kinds:
+        return []
+
+    tools: list[Tool] = [MediaParamsTool(service)]
+    if 'image' in kinds:
+        tools.append(GenerateImageTool(service))
+    if 'video' in kinds:
+        # The other three only mean anything with video: a video is a job, so
+        # it needs something to check on, and a job needs a workflow template
+        # to run — which `import_workflow` is how you get.
+        tools += [GenerateVideoTool(service), MediaJobTool(service), ImportWorkflowTool(service)]
+    return tools

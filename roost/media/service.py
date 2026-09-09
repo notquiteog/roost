@@ -77,6 +77,20 @@ class MediaService:
         self.registry = registry
         self.jobs: dict[str, Job] = {}
 
+    def can_generate(self) -> set[str]:
+        """Which kinds of media this install can actually make, right now.
+
+        Asked before the tools are offered. A model shown `generate_video` on
+        a machine with no video backend will propose it, be told nothing is
+        configured, and spend the turn recovering — the same reason
+        `write_file` is left out of a read-only session rather than registered
+        and refused. On a small model the cost is worse than a wasted step: a
+        tool list full of things that cannot work is a tool list it reasons
+        about instead of doing the task.
+        """
+        available = self.registry.capabilities()
+        return {kind for kind in ('image', 'video') if available.get(kind)}
+
     # -- what can be asked for ----------------------------------------------
 
     def _resolve(self, kind: str, provider: str | None, model: str | None):

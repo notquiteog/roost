@@ -184,6 +184,14 @@ class OllamaProvider(ChatProvider, EmbeddingProvider):
                 'provider': self.provider_id,
                 'size': m.get('size'),
                 'family': (m.get('details') or {}).get('family'),
+                # What this model can be asked to do, as Ollama reports it:
+                # 'completion', 'tools', 'vision', 'thinking', 'embedding'.
+                # Carried because it is the only reliable way to tell an
+                # embedding model from a chat one — the names do not, and
+                # picking wrong produces a 400 that reads as a broken install.
+                'capabilities': (m.get('details') or {}).get('capabilities')
+                or m.get('capabilities')
+                or [],
             }
             for m in body.get('models', [])
             if m.get('name')

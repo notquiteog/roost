@@ -218,6 +218,53 @@ class ProviderRegistry:
         return chosen.impls[modality], Route(provider=chosen.info.id), chosen.info
 
 
+# What a model has to be able to do to serve each modality. Ollama is the only
+# backend that reports this today; everything else returns bare ids, which is
+# why an empty capability list means "no idea, assume it can" rather than "no".
+_NEEDED = {
+    Modality.CHAT: ('completion', 'tools'),
+    Modality.EMBEDDING: ('embedding',),
+}
+
+
+def can_serve(model: dict[str, Any], modality: Modality) -> bool:
+    """Whether a listed model can serve this modality, as far as anyone knows."""
+    declared = model.get('capabilities') or []
+    if not declared:
+        return True
+    wanted = _NEEDED.get(modality)
+    if not wanted:
+        return True
+    return any(c in declared for c in wanted)
+
+
+def pick_model(models: list[dict[str, Any]], modality: Modality, *, need_tools: bool = False) -> str:
+    """The best of a provider's models for a job, when nobody named one.
+
+    Two failures this exists to stop, both seen on a real install:
+
+    An embedding model chosen for chat. `/api/tags` lists everything that is
+    pulled and the first entry is alphabetical, so an install with
+    `qwen3-embedding:4b` on it answered every conversation with an HTTP 400
+    saying that model does not support chat — which reads as a broken daemon
+    rather than as a bad default.
+
+    A chat model that cannot call tools chosen for an agent session. It
+    connects, it talks, and it can do nothing at all, which is a much more
+    confusing failure than not starting.
+    """
+    usable = [m for m in models if m.get('id') and can_serve(m, modality)]
+    if not usable:
+        return ''
+    if need_tools:
+        with_tools = [m for m in usable if 'tools' in (m.get('capabilities') or [])]
+        # Only when something declared it. A provider that reports no
+        # capabilities at all must not be narrowed to nothing.
+        if with_tools:
+            usable = with_tools
+    return str(usable[0]['id'])
+
+
 # Process-wide registry. Deliberately a module global: providers are
 # configuration, every request reads the same set, and threading one through
 # every call site buys nothing.

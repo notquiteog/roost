@@ -20,7 +20,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from roost.config import config
 from roost.protocol.voice import AudioFormat, VoiceReady
 from roost.providers.base import Modality
-from roost.providers.registry import NoProviderError, Route, RouteSet, registry
+from roost.providers.registry import NoProviderError, Route, RouteSet, pick_model, registry
 from roost.voice.pipeline import VoiceConfig, VoiceSession
 from roost.voice.vad import VadConfig
 
@@ -69,8 +69,11 @@ async def voice_socket(ws: WebSocket, token: str | None = Query(None)) -> None:
     fmt = AudioFormat(**(opening.get('format') or {}))
     llm_model = opening.get('model') or llm_route.model or config.default_chat_model
     if not llm_model:
+        # Same rule as the agent socket: not the first model, the first one
+        # that can actually hold a conversation. Tools are not required here —
+        # a voice call without an agent attached only has to talk.
         models = await llm.models()
-        llm_model = models[0]['id'] if models else ''
+        llm_model = pick_model(models, Modality.CHAT)
 
     cfg = VoiceConfig(
         sample_rate=fmt.sample_rate,

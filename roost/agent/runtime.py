@@ -26,6 +26,48 @@ from roost.agent.tools.files import EditTool, ListDirTool, ReadTool, WriteTool
 from roost.agent.tools.search import GlobTool, GrepTool
 from roost.agent.tools.shell import ShellTool
 
+# What each named toolset contains. Groups rather than individual names,
+# because the choice a person actually makes is "this session is for browsing"
+# rather than a list of eleven function names.
+#
+# This exists because of a measured failure, not a preference. gemma4:12b —
+# a model this project explicitly targets — was given the full set of thirty
+# and could not complete a five-step browser task: it opened the page, then
+# lost the thread and reported that it had no way to browse. The same model,
+# the same task, the same prompt, with only the browser tools: done in
+# twenty-six seconds, correctly, first try. The tools were not the problem.
+# The *list* was.
+TOOLSETS: dict[str, tuple[str, ...]] = {
+    'files': ('read_file', 'read_files', 'write_file', 'edit_file', 'multi_edit',
+              'apply_patch', 'outline', 'list_dir', 'glob', 'grep'),
+    'shell': ('shell',),
+    'plan': ('plan',),
+    'ask': ('ask_user',),
+    'web': ('web_search', 'web_fetch', 'research'),
+    'browser': ('browser_navigate', 'browser_read', 'browser_click', 'browser_type',
+                'browser_screenshot', 'browser_hand_over'),
+    'desktop': ('desktop_screenshot', 'desktop_click', 'desktop_type', 'desktop_key',
+                'desktop_scroll'),
+    'media': ('media_params', 'generate_image', 'generate_video', 'media_job', 'import_workflow'),
+    'memory': ('remember', 'recall'),
+}
+
+
+def resolve_toolset(names: list[str]) -> set[str] | None:
+    """Turn what a caller asked for into a set of tool names, or None for all.
+
+    Unknown entries are kept as literal tool names rather than rejected: a
+    caller who wants exactly `shell` and `read_file` should be able to say so
+    without a group existing for it. `ask_user` is always in, whatever was
+    asked for — a session that cannot ask a question is a session that guesses.
+    """
+    if not names:
+        return None
+    allowed: set[str] = set(TOOLSETS['ask'])
+    for name in names:
+        allowed.update(TOOLSETS.get(name, (name,)))
+    return allowed
+
 
 def default_tools() -> list[Tool]:
     return [
@@ -115,6 +157,7 @@ def build_session(
     browser: Any = None,
     stage: Any = None,
     media: Any = None,
+    toolset: list[str] | None = None,
     mcp: Any = None,
     checkpoints: Any = None,
 ) -> AgentSession:
@@ -165,6 +208,26 @@ def build_session(
     if mcp is not None:
         chosen = [*chosen, *mcp_tools(mcp)]
 
+    # What this session actually has, for the prompt. Derived from the tools
+    # that ended up on it rather than from the arguments, so a capability that
+    # was asked for and could not be built is not claimed.
+    names = {t.name for t in chosen}
+    capabilities = [
+        name for name, marker in (
+            ('browser', 'browser_navigate'),
+            ('desktop', 'desktop_screenshot'),
+            ('media', 'generate_image'),
+            ('memory', 'recall'),
+        )
+        if marker in names
+    ]
+
+    # Narrowed last, after everything has been added, so a group name means
+    # the same thing whichever capabilities happen to be attached.
+    allowed = resolve_toolset(toolset or [])
+    if allowed is not None:
+        chosen = [t for t in chosen if t.name in allowed]
+
     context = prompt_mod.project_context(root_path)
     if extra_prompt:
         context = f'{context}\n\n{extra_prompt}' if context else extra_prompt
@@ -177,7 +240,11 @@ def build_session(
         tools=chosen,
         policy=policy,
         system_prompt=prompt_mod.build(
-            root_path, policy=policy.describe(), extra=context, confined=confined
+            root_path,
+            policy=policy.describe(),
+            extra=context,
+            confined=confined,
+            capabilities=capabilities,
         ),
         env=env,
         title=title,

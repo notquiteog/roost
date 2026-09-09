@@ -19,7 +19,7 @@ from roost.agent.approval import Mode
 from roost.agent.manager import manager
 from roost.config import config
 from roost.providers.base import Modality
-from roost.providers.registry import NoProviderError, Route, RouteSet, registry
+from roost.providers.registry import NoProviderError, Route, RouteSet, pick_model, registry
 from roost.routers import media as media_router
 from roost.routers import memory as memory_router
 
@@ -41,7 +41,18 @@ async def _resolve_chat(provider: str | None, model: str | None) -> tuple[object
         available = await impl.models()
         if not available:
             raise NoProviderError(f'{info.id} reports no models')
-        chosen = available[0]['id']
+        # Not simply the first. An install with an embedding model pulled
+        # alongside a chat one answered every conversation with "that model
+        # does not support chat", because the first entry happened to be the
+        # embedding one — and an agent session needs tool calling on top of
+        # that, so a model that cannot do it is the wrong default even when it
+        # would answer.
+        chosen = pick_model(available, Modality.CHAT, need_tools=True)
+        if not chosen:
+            names = ', '.join(str(m.get('id')) for m in available[:8])
+            raise NoProviderError(
+                f'{info.id} has no model that can hold a conversation. It offers: {names}'
+            )
     return impl, chosen, info.id
 
 
@@ -51,6 +62,13 @@ class CreateSession(BaseModel):
     provider: str | None = None
     mode: str | None = None
     title: str = ''
+    # Which groups of tools this session gets. Empty means all of them.
+    #
+    # Worth having because a long tool list is not free: a 12B model given
+    # thirty tools failed a five-step browser task that the same model, with
+    # only the browser tools, finished in twenty-six seconds. Group names are
+    # in `runtime.TOOLSETS`; an unrecognised entry is taken as a tool name.
+    tools: list[str] = []
 
 
 @http.post('')
@@ -69,6 +87,7 @@ async def create_session(body: CreateSession) -> dict[str, object]:
             title=body.title,
             memory=memory_router.service,
             media=media_router.service,
+            toolset=body.tools,
             user_id=config.default_user,
         )
     except ValueError as exc:
@@ -88,6 +107,14 @@ async def create_session(body: CreateSession) -> dict[str, object]:
 @http.get('')
 async def list_sessions() -> dict[str, object]:
     return {'sessions': manager.list()}
+
+
+@http.get('/toolsets')
+async def list_toolsets() -> dict[str, object]:
+    """The groups a session can be narrowed to, and what is in each."""
+    from roost.agent.runtime import TOOLSETS
+
+    return {'toolsets': {name: list(tools) for name, tools in TOOLSETS.items()}}
 
 
 @http.get('/{session_id}/checkpoints')
@@ -145,6 +172,7 @@ async def agent_socket(
     model: str | None = Query(None),
     provider: str | None = Query(None),
     mode: str | None = Query(None),
+    tools: str | None = Query(None, description='Comma-separated toolset names. Empty for all.'),
     token: str | None = Query(None),
 ) -> None:
     if config.auth_token and token != config.auth_token:
@@ -184,6 +212,7 @@ async def agent_socket(
                 mode=Mode(mode or config.approval_mode),
                 memory=memory_router.service,
                 media=media_router.service,
+                toolset=[t.strip() for t in (tools or '').split(',') if t.strip()],
                 user_id=config.default_user,
             )
         except (NoProviderError, ValueError) as exc:
