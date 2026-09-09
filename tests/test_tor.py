@@ -1,5 +1,30 @@
 """Routing a provider through Tor: precedence, the default, and the diagnosis.
 
+The second half of this file is the guard that keeps adapters from opening
+their own connections, and it has been through enough rounds of "that check
+was passing without checking anything" to be worth a note on how it is
+verified. Two properties are not expressible as tests, because testing them
+means damaging the test file itself, so they are checked by hand and recorded
+here:
+
+**The floors are structural.** They live in `_outbound_calls` rather than in a
+test of their own, so every caller inherits them. The verification is a
+*two-fault* plant, because any single fault trips either arrangement: delete
+both `test_the_guard_notices…` and `test_a_dead_match_set…`, and blind the
+walk in the same run. All four remaining checks then fail, and the message
+names the cause — "the scan found only 0 outbound calls… every check that
+filters this list is about to pass on an empty one" — rather than asserting
+that an empty list was not empty. Under the earlier arrangement, where a
+sibling test held the floors, that same run was clean.
+
+**A plant proves nothing unless it applied and still parses.** A substitution
+that silently matched nothing reports a pass; one that breaks the file reports
+a failure. Both are uninformative, and they are the same mistake in opposite
+directions — reading "it passed" as "it was checked", and "it failed" as "it
+was caught". So each plant asserts its substitution applied, that the result
+parses, and that the failure *names the planted line*.
+
+
 No socket and no database. The rules are the ones cryptostore's proxy config
 settled, and they are pinned here for the same reason they are pinned there:
 the failure they prevent is silent. An operator who moved their proxy once and
