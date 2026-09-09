@@ -15,6 +15,13 @@ from roost.agent.approval import ApprovalPolicy, Mode
 from roost.agent.session import AgentSession
 from roost.agent.tools.ask import AskUserTool
 from roost.agent.tools.base import Tool
+from roost.agent.tools.code import (
+    ApplyPatchTool,
+    MultiEditTool,
+    OutlineTool,
+    PlanTool,
+    ReadFilesTool,
+)
 from roost.agent.tools.files import EditTool, ListDirTool, ReadTool, WriteTool
 from roost.agent.tools.search import GlobTool, GrepTool
 from roost.agent.tools.shell import ShellTool
@@ -23,23 +30,31 @@ from roost.agent.tools.shell import ShellTool
 def default_tools() -> list[Tool]:
     return [
         ReadTool(),
+        ReadFilesTool(),
         WriteTool(),
         EditTool(),
+        MultiEditTool(),
+        ApplyPatchTool(),
+        OutlineTool(),
         ListDirTool(),
         GlobTool(),
         GrepTool(),
         ShellTool(),
+        PlanTool(),
         AskUserTool(),
     ]
 
 
 def web_tools(cfg: Any) -> list[Tool]:
+    from roost.agent.tools.research import ResearchTool
     from roost.agent.tools.web import WebFetchTool, WebSearchTool
 
-    return [
-        WebFetchTool(allow_private=cfg.web_allow_private),
-        WebSearchTool(backend=cfg.search_backend, api_key=cfg.search_key, base_url=cfg.search_url),
-    ]
+    fetch = WebFetchTool(allow_private=cfg.web_allow_private)
+    search = WebSearchTool(backend=cfg.search_backend, api_key=cfg.search_key, base_url=cfg.search_url)
+    # `research` is given the other two rather than its own: one set of keys,
+    # one private-address guard, and no way for the composite to reach
+    # somewhere the individual tools would refuse.
+    return [fetch, search, ResearchTool(search, fetch)]
 
 
 def mcp_tools(manager: Any) -> list[Tool]:
@@ -118,7 +133,10 @@ def build_session(
     # rather than registered and refused. A model that can see `write_file`
     # will keep proposing it and spend the turn being told no.
     if policy.mode is Mode.READ_ONLY:
-        chosen = [t for t in chosen if t.name not in {'write_file', 'edit_file'}]
+        chosen = [
+            t for t in chosen
+            if t.name not in {'write_file', 'edit_file', 'multi_edit', 'apply_patch'}
+        ]
 
     # Memory is added as tools and as a per-turn hook, and only when this
     # person has switched it on — so a model in a session without memory is

@@ -1,47 +1,36 @@
-/* Roost's browser client.
+/* Roost's browser client: the shell, and the mode you type in.
  *
  * No framework and no build step: this is served from the machine it runs on,
  * so a toolchain would be a dependency with nothing to show for it.
  *
- * Two sockets. The agent socket is attached to rather than owned — closing
- * this page pauses your view of a session, it does not stop it — so on
- * connect we send the last sequence number we saw and the server replays the
- * gap. The voice socket carries binary audio in both directions and JSON for
- * everything else.
+ * This file is the session list, the agent socket and the transcript — the
+ * Code mode, which is the one everything else is measured against. The other
+ * five modes are their own files and know nothing about this one; they share
+ * the daemon, the companion and a handful of DOM helpers, and nothing else.
+ * That is why adding Talk did not touch the transcript and adding the studio
+ * did not touch the socket.
+ *
+ * The agent socket is attached to rather than owned — closing this page
+ * pauses your view of a session, it does not stop it — so on connect we send
+ * the last sequence number we saw and the server replays the gap.
  */
 
 import { companion, caption } from './companions/index.js';
-
-const $ = (sel) => document.querySelector(sel);
-const el = (tag, cls, text) => {
-  const node = document.createElement(tag);
-  if (cls) node.className = cls;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
-
-/* One of the symbols defined at the top of the page. */
-function icon(name) {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('class', 'ic');
-  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-  use.setAttribute('href', `#i-${name}`);
-  svg.appendChild(use);
-  return svg;
-}
+import { wireConnections } from './connections.js';
+import { $, api, el, icon, onReachable, socket, took } from './dom.js';
+import { endLive, isLive, wireLive } from './live.js';
+import { go, mode, onEnter, onLeave, wireModes } from './modes.js';
+import { focusSearch, wireSearch } from './search.js';
+import { openStudio, stopPolling, wireStudio } from './studio.js';
+import { startTalking, stopTalking, talking, wireTalk } from './talk.js';
+import { Voice } from './voice.js';
+import { narrate, refreshRuns, wireWatch } from './watch.js';
 
 function ago(seconds) {
   if (seconds < 60) return 'now';
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
   return `${Math.floor(seconds / 86400)}d`;
-}
-
-function took(ms) {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
-  const mins = Math.floor(ms / 60000);
-  return `${mins}m ${Math.round((ms % 60000) / 1000)}s`;
 }
 
 const state = {
@@ -258,16 +247,22 @@ function renderDiff(text) {
    back to its own name in monospace, which is honest about being a tool. */
 const VERBS = {
   read_file: 'Read',
+  read_files: 'Read',
+  outline: 'Sketched',
   list_dir: 'Listed',
   glob: 'Found',
   grep: 'Searched',
   recall: 'Recalled',
   write_file: 'Wrote',
   edit_file: 'Edited',
+  multi_edit: 'Edited',
+  apply_patch: 'Patched',
+  plan: 'Planned',
   remember: 'Remembered',
   shell: 'Ran',
   web_search: 'Searched the web for',
   web_fetch: 'Fetched',
+  research: 'Looked into',
   browser_navigate: 'Opened',
   browser_read: 'Read the page',
   browser_click: 'Clicked',
@@ -609,15 +604,8 @@ function connectAgent(sessionId) {
   }
   state.sessionId = sessionId;
 
-  const url = new URL(`/ws/agent`, location.href);
-  url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  url.searchParams.set('session', sessionId);
   // Resume rather than replay everything: on a reconnect we only want the gap.
-  url.searchParams.set('since', String(state.seq));
-  const token = new URLSearchParams(location.search).get('token');
-  if (token) url.searchParams.set('token', token);
-
-  const ws = new WebSocket(url);
+  const ws = new WebSocket(socket('/ws/agent', { session: sessionId, since: state.seq }));
   state.agent = ws;
 
   ws.onopen = () => {
@@ -662,6 +650,11 @@ function connectAgent(sessionId) {
 }
 
 function handleAgentEvent(ev) {
+  // Autopilot renders the same events as one line each, so it is fed here
+  // rather than opening a second socket onto the same session — two readers
+  // of one event stream is two places for the sequence number to drift.
+  narrate(ev);
+
   switch (ev.type) {
     case 'session.started':
       // The promise, spelled out, once: what this session may do without
@@ -785,238 +778,62 @@ function handleAgentEvent(ev) {
 
 /* ------------------------------------------------------------------ voice */
 
-class Player {
-  /* Schedules PCM16 into the audio graph and can drop it all instantly.
-   *
-   * That second part is the whole reason this is not an <audio> element:
-   * barge-in has to stop what is already queued, and a media element gives
-   * you no handle on individual buffers. */
-  constructor(rate) {
-    this.rate = rate;
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    this.next = 0;
-    this.sources = new Set();
-    this.utterance = null;
-  }
-
-  push(utteranceId, pcm) {
-    if (utteranceId !== this.utterance) {
-      this.utterance = utteranceId;
-      // A small lead so the first buffer is not scheduled in the past on a
-      // loaded machine, which drops it silently.
-      this.next = this.ctx.currentTime + 0.06;
-    }
-    const buffer = this.ctx.createBuffer(1, pcm.length, this.rate);
-    const channel = buffer.getChannelData(0);
-    for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 32768;
-
-    const source = this.ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(this.ctx.destination);
-    const at = Math.max(this.next, this.ctx.currentTime);
-    source.start(at);
-    this.next = at + buffer.duration;
-    this.sources.add(source);
-    source.onended = () => this.sources.delete(source);
-  }
-
-  cancel() {
-    for (const source of this.sources) {
-      try { source.stop(); } catch { /* already finished */ }
-    }
-    this.sources.clear();
-    this.next = 0;
-    this.utterance = null;
-  }
-
-  get speaking() {
-    return this.sources.size > 0;
-  }
-}
-
-class Voice {
-  constructor() {
-    this.ws = null;
-    this.player = null;
-    this.stream = null;
-    this.ctx = null;
-    this.muted = false;
-  }
-
-  async start() {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
-
-    const url = new URL('/ws/voice', location.href);
-    url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const token = new URLSearchParams(location.search).get('token');
-    if (token) url.searchParams.set('token', token);
-
-    this.ws = new WebSocket(url);
-    this.ws.binaryType = 'arraybuffer';
-
-    await new Promise((resolve, reject) => {
-      this.ws.onopen = resolve;
-      this.ws.onerror = () => reject(new Error('could not open the voice socket'));
-    });
-
-    this.ws.send(JSON.stringify({ type: 'voice.start', format: { sample_rate: 16000, encoding: 'pcm16' } }));
-    this.ws.onmessage = (msg) => this.onMessage(msg);
-    this.ws.onclose = () => this.stop(true);
-  }
-
-  async beginCapture(rate) {
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    await this.ctx.audioWorklet.addModule('/static/capture-worklet.js');
-    const source = this.ctx.createMediaStreamSource(this.stream);
-    const node = new AudioWorkletNode(this.ctx, 'roost-capture', {
-      processorOptions: { targetRate: rate },
-    });
-    node.port.onmessage = (e) => {
-      if (this.muted) return;
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(e.data.buffer);
-    };
-    source.connect(node);
-    // Deliberately not connected to the destination: routing the microphone
-    // to the speakers is how you get feedback.
-    this.captureNode = node;
-  }
-
-  onMessage(msg) {
-    if (msg.data instanceof ArrayBuffer) {
-      // 12 ASCII bytes of utterance id, then PCM16.
-      const view = new Uint8Array(msg.data);
-      const id = new TextDecoder().decode(view.slice(0, 12)).trim();
-      const pcm = new Int16Array(msg.data.slice(12));
-      if (this.player) this.player.push(id, pcm);
-      companion.set('speaking');
-      return;
-    }
-
-    const ev = JSON.parse(msg.data);
-    switch (ev.type) {
-      case 'voice.ready':
-        this.player = new Player(ev.output_format.sample_rate);
-        this.beginCapture(ev.format.sample_rate);
-        $('#voice-strip').hidden = false;
-        setVoiceState(`${ev.stt} → ${ev.llm} → ${ev.tts}`);
-        break;
-
-      case 'vad.speech_started':
-        companion.set('listening');
-        break;
-
-      case 'vad.speech_stopped':
-        companion.set('thinking');
-        break;
-
-      case 'transcript.partial':
-        $('#voice-partial').textContent = ev.text;
-        break;
-
-      case 'transcript.final':
-        $('#voice-partial').textContent = '';
-        if (ev.submitted) userTurn(ev.text);
-        else notice(`Heard "${ev.text}" — too short to answer.`);
-        break;
-
-      case 'assistant.text.delta':
-        appendText(ev.text);
-        break;
-
-      case 'speech.started':
-        state.turnNode = null;
-        companion.set('speaking');
-        break;
-
-      case 'speech.cancelled':
-        // The decisive moment. Everything already scheduled has to go, or the
-        // assistant keeps talking over you for as long as the buffer lasts.
-        if (this.player) this.player.cancel();
-        notice('— interrupted');
-        companion.set('listening');
-        break;
-
-      case 'speech.stopped':
-        companion.set('idle');
-        break;
-
-      case 'voice.error':
-        notice(ev.message, 'error');
-        break;
-    }
-  }
-
-  interrupt() {
-    if (this.player) this.player.cancel();
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'voice.interrupt' }));
-    }
-  }
-
-  setMuted(muted) {
-    this.muted = muted;
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'voice.mute', muted }));
-    }
-  }
-
-  stop(remote) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN && !remote) {
-      this.ws.send(JSON.stringify({ type: 'voice.stop' }));
-      this.ws.close();
-    }
-    if (this.player) this.player.cancel();
-    if (this.captureNode) this.captureNode.disconnect();
-    if (this.ctx) this.ctx.close();
-    if (this.stream) for (const track of this.stream.getTracks()) track.stop();
-    this.ws = this.ctx = this.stream = this.player = null;
-    companion.set('idle');
-    $('#voice-strip').hidden = true;
-    $('#voice-toggle').classList.remove('on');
-    $('#voice-toggle').title = 'Start voice';
-    state.voice = null;
-  }
-}
+/* The composer's microphone button opens the same call Talk mode uses; the
+   difference is only the surface around it. See voice.js — the call itself
+   lives there precisely so that these two cannot drift apart on the delicate
+   part, which is barge-in. */
 
 function setVoiceState(text) {
   $('#voice-state').textContent = text;
 }
 
+function startStripVoice() {
+  const call = new Voice({
+    ready: (ev) => {
+      $('#voice-strip').hidden = false;
+      setVoiceState(`${ev.stt} → ${ev.llm} → ${ev.tts}`);
+    },
+    listening: () => companion.set('listening'),
+    thinking: () => companion.set('thinking'),
+    partial: (text) => { $('#voice-partial').textContent = text; },
+    heard: (text, submitted) => {
+      $('#voice-partial').textContent = '';
+      if (submitted) userTurn(text);
+      else notice(`Heard "${text}" — too short to answer.`);
+    },
+    said: (delta) => appendText(delta),
+    speaking: () => {
+      state.turnNode = null;
+      companion.set('speaking');
+    },
+    cancelled: () => {
+      notice('— interrupted');
+      companion.set('listening');
+    },
+    finished: () => companion.set('idle'),
+    error: (message) => notice(message, 'error'),
+    stopped: () => {
+      state.voice = null;
+      companion.set('idle');
+      $('#voice-strip').hidden = true;
+      $('#voice-toggle').classList.remove('on');
+      $('#voice-toggle').title = 'Start voice';
+    },
+  });
+  return call;
+}
 
 /* --------------------------------------------------------------- requests */
 
-/* Every call to the daemon goes through here.
- *
- * The page is expected to outlive the process it talks to: the daemon gets
- * restarted, the laptop sleeps, the tab sits open overnight. So a failed fetch
- * is an ordinary condition, not an exception — and an unhandled rejection in
- * the five-second poll is particularly bad, because that poll is the thing
- * that notices the daemon came back. */
-async function api(path, options) {
-  try {
-    const res = await fetch(path, options);
-    setReachable(true);
-    return res;
-  } catch {
-    // A network-level failure: the daemon is not listening.
-    setReachable(false);
-    return null;
-  }
-}
-
-let reachable = true;
-
-function setReachable(ok) {
-  if (ok === reachable) return;
-  reachable = ok;
+/* `api` itself is in dom.js, because every mode needs it and the knowledge
+   that the daemon has gone must exist in exactly one place — two copies means
+   one of them showing "live" while the other has been failing for a minute. */
+onReachable((ok) => {
+  if (ok) return;
   const pill = $('#link');
-  if (!ok) {
-    pill.textContent = 'no daemon';
-    pill.className = 'pill off';
-  }
-}
+  pill.textContent = 'no daemon';
+  pill.className = 'pill off';
+});
 
 /* ------------------------------------------------------------------ rewind */
 
@@ -1347,12 +1164,23 @@ async function loadProviders() {
   }
 
   const select = $('#new-dialog select[name=provider]');
+  // Rebuilt rather than appended to: this runs again whenever a connection is
+  // added, and appending would give three copies of Groq after three edits.
+  select.textContent = '';
+  const auto = el('option', '', 'first that can do chat');
+  auto.value = '';
+  select.appendChild(auto);
   for (const p of data.providers || []) {
     if (!p.modalities.includes('chat')) continue;
     const option = el('option', '', `${p.label}${p.local ? ' (local)' : ''}`);
     option.value = p.id;
     select.appendChild(option);
   }
+
+  // The studio's provider list is the subset that can actually make something.
+  wireStudio((data.providers || []).filter(
+    (p) => p.modalities.includes('image') || p.modalities.includes('video'),
+  ));
 }
 
 const LAST_SESSION = 'roost.session';
@@ -1476,9 +1304,12 @@ function wire() {
       state.voice.stop();
       return;
     }
-    const voice = new Voice();
+    const voice = startStripVoice();
     try {
-      await voice.start();
+      // The strip's call is attached to the open session, so speaking to it
+      // here can act on the machine — which is the difference between this
+      // and Talk mode's default, where the tick box is off.
+      await voice.start({ agentSession: state.sessionId });
       state.voice = voice;
       $('#voice-toggle').classList.add('on');
       $('#voice-toggle').title = 'End voice';
@@ -1496,11 +1327,27 @@ function wire() {
     e.target.textContent = muted ? 'Unmute' : 'Mute';
   };
 
-  // Escape stops whatever is running: the fastest possible way to say "no".
+  // Escape stops whatever is running: the fastest possible way to say "no",
+  // and it has to mean that in every mode. Ordered by what is most urgent to
+  // stop — something currently talking at you comes before a turn quietly
+  // grinding away in the background.
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (state.voice) state.voice.interrupt();
+    if (isLive()) endLive();
+    else if (talking()) stopTalking();
+    else if (state.voice) state.voice.interrupt();
     else if (state.busy) send({ type: 'turn.interrupt' });
+  });
+
+  // The modes worth a shortcut are the two that change what the keyboard is
+  // for. Ctrl+Shift rather than a bare letter, because a bare letter would
+  // fire while someone is typing into the composer.
+  document.addEventListener('keydown', (e) => {
+    if (!e.ctrlKey || !e.shiftKey) return;
+    if (e.key.toLowerCase() === 't') {
+      e.preventDefault();
+      $('#talk-button').click();
+    }
   });
 }
 
@@ -1510,16 +1357,79 @@ function wire() {
 // has no way to observe, and dropping the background without it would leave
 // the interface floating on nothing.
 
+/* ------------------------------------------------------------------ modes */
+
+/* The one button. It does the whole thing — switches the app to talking and
+   opens the microphone — because a "talk mode" you then have to press a
+   second control to actually start talking in is two buttons wearing one
+   coat. Pressing it again puts you back where you were. */
+function wireTheOneButton() {
+  $('#talk-button').onclick = () => {
+    if (mode() === 'talk' || mode() === 'live') {
+      go('code');
+      return;
+    }
+    go('talk');
+    startTalking();
+  };
+}
+
+/* What each mode owns while it is on screen, and what it must give back.
+ *
+ * Handing things back is the half that matters. A microphone left open
+ * because someone clicked away from Talk is a microphone left open; a frame
+ * stream left running is a screen being captured for nobody. So every mode
+ * that takes a resource releases it here, in one place, rather than each of
+ * them remembering to. */
+function wireModeLifecycle() {
+  onEnter('talk', () => companion.set('idle'));
+  onLeave('talk', () => stopTalking());
+
+  onEnter('live', () => companion.set('idle'));
+  onLeave('live', () => endLive());
+
+  onEnter('watch', () => refreshRuns());
+
+  onEnter('studio', () => openStudio());
+  onLeave('studio', () => stopPolling());
+
+  onEnter('search', () => focusSearch());
+}
+
 wire();
 wireMemory();
 wireRewind();
+wireTheOneButton();
+
+const sessionId = () => state.sessionId;
+wireTalk({ sessionId });
+wireLive({ sessionId });
+wireWatch({
+  root: () => (state.info && state.info.root) || null,
+  // Autopilot's narration comes off the ordinary agent socket, so watching a
+  // run means attaching to its session — which also puts its approvals and
+  // questions in the Code tab, with the full context around them.
+  attach: (id) => selectSession(id),
+});
+wireSearch();
+// Adding or removing a connection changes what every picker on the page can
+// offer, so the whole lot is refreshed rather than the dialog patching them.
+wireConnections(() => loadProviders());
+wireModeLifecycle();
+
+// Last, and that ordering is load-bearing: this restores the mode you were
+// last in and runs that mode's enter hook as it does. Anything registered
+// after it is registered too late, which shows up as reopening the page on
+// the studio and getting an empty one.
+wireModes();
 
 /* The companion, everywhere it has something to say.
  *
- * One creature, one state, five places: the perch it lives on, the sidebar
- * where it doubles as the app's own mark, the middle of an empty session,
- * the composer where it says in words what it is doing, and the voice strip.
- * Approval bars grow a sixth on demand. They are all driven from the same
+ * One creature, one state, and now eight places: the perch it lives on, the
+ * sidebar where it doubles as the app's own mark, the middle of an empty
+ * session, the composer where it says in words what it is doing, the voice
+ * strip, and the three new modes — talking, live, and watching it work.
+ * Approval bars grow another on demand. They are all driven from the same
  * object, so the animal is never in two moods at once, and choosing a
  * different one — or none — changes every one of them together. */
 companion.mount($('#perch'), { place: 'above' });

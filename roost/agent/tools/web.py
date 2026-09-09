@@ -185,10 +185,14 @@ class WebSearchTool(Tool):
             return Assessment(risk=Risk.NETWORK, summary='', invalid='query is required')
         return Assessment(risk=Risk.NETWORK, summary=f'search {query!r} ({self.backend})')
 
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
-        query = args['query'].strip()
-        count = min(int(args.get('count') or 8), 20)
+    async def search(self, query: str, count: int = 8) -> list[dict]:
+        """The results, as data.
 
+        Split out from `run` so that the research tool and the search endpoint
+        go through exactly the same backends the agent does — a second search
+        path would be a second set of keys, a second failure mode, and
+        eventually a different answer to the same question.
+        """
         handler = {
             'brave': self._brave,
             'tavily': self._tavily,
@@ -197,8 +201,13 @@ class WebSearchTool(Tool):
         }.get(self.backend)
         if handler is None:
             raise ToolError(f'unknown search backend: {self.backend}')
+        return await handler(query, min(max(count, 1), 20))
 
-        results = await handler(query, count)
+    async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
+        query = args['query'].strip()
+        count = min(int(args.get('count') or 8), 20)
+
+        results = await self.search(query, count)
         if not results:
             return Output(content=f'No results for {query!r}.')
 

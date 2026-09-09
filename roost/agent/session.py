@@ -494,71 +494,78 @@ class AgentSession:
         will overlap when it proposes them.
         """
         results: list[ToolResultBlock] = []
-
         for call in calls:
-            tool = self.tools.get(call.name)
-            if tool is None:
-                results.append(
-                    ToolResultBlock(
-                        tool_use_id=call.id,
-                        content=f'No such tool: {call.name}. Available: {", ".join(sorted(self.tools))}',
-                        is_error=True,
-                    )
-                )
-                continue
+            results.append(await self.invoke(call, turn_id))
+        return results
 
-            ctx = self._context(turn_id, call.id)
+    async def invoke(self, call: ToolCall, turn_id: str) -> ToolResultBlock:
+        """Assess one call, get it approved, run it, and report all of it.
 
-            try:
-                assessment = tool.assess(call.arguments, ctx)
-            except Exception as exc:  # noqa: BLE001
-                assessment = Assessment(risk=Risk.READ, summary='', invalid=str(exc))
+        Public, and used by two callers that look nothing alike: the loop
+        above, and the realtime gateway, where the model is upstream and calls
+        tools over its own protocol rather than through a provider stream.
 
-            if assessment.invalid:
-                results.append(
-                    ToolResultBlock(tool_use_id=call.id, content=f'Invalid call: {assessment.invalid}', is_error=True)
-                )
-                continue
-
-            call.risk = assessment.risk
-            call.summary = assessment.summary
-
-            decision, why = self.policy.decide(call)
-
-            if decision is Decision.DENY:
-                call.status = ToolStatus.DENIED
-                await self._emit(ToolDenied(session_id=self.id, turn_id=turn_id, call_id=call.id, reason=why))
-                results.append(
-                    ToolResultBlock(tool_use_id=call.id, content=f'Not permitted: {why}', is_error=True)
-                )
-                continue
-
-            await self._emit(
-                ToolProposed(
-                    session_id=self.id,
-                    turn_id=turn_id,
-                    call=call,
-                    needs_approval=decision is Decision.ASK,
-                )
+        That sharing is the point. A second execution path would be a second
+        place for the approval policy to be applied — and the one that gets it
+        wrong is the one nobody is watching, which in the realtime case is a
+        model talking to a person with no transcript in front of them. Going
+        through here means the risk grading, the suspension on a human, the
+        remembered approvals, the checkpoint and the events a UI renders are
+        all the same code in both.
+        """
+        tool = self.tools.get(call.name)
+        if tool is None:
+            return ToolResultBlock(
+                tool_use_id=call.id,
+                content=f'No such tool: {call.name}. Available: {", ".join(sorted(self.tools))}',
+                is_error=True,
             )
 
-            if decision is Decision.ASK and call.name != 'ask_user':
-                allowed, reason, remember = await self._await_approval(call.id)
-                if not allowed:
-                    call.status = ToolStatus.DENIED
-                    await self._emit(
-                        ToolDenied(session_id=self.id, turn_id=turn_id, call_id=call.id, reason=reason)
-                    )
-                    results.append(
-                        ToolResultBlock(tool_use_id=call.id, content=_denial_text(call, reason), is_error=True)
-                    )
-                    continue
-                if remember:
-                    self.policy.remember(call)
+        ctx = self._context(turn_id, call.id)
 
-            results.append(await self._execute(turn_id, tool, call, ctx))
+        try:
+            assessment = tool.assess(call.arguments, ctx)
+        except Exception as exc:  # noqa: BLE001
+            assessment = Assessment(risk=Risk.READ, summary='', invalid=str(exc))
 
-        return results
+        if assessment.invalid:
+            return ToolResultBlock(
+                tool_use_id=call.id, content=f'Invalid call: {assessment.invalid}', is_error=True
+            )
+
+        call.risk = assessment.risk
+        call.summary = assessment.summary
+
+        decision, why = self.policy.decide(call)
+
+        if decision is Decision.DENY:
+            call.status = ToolStatus.DENIED
+            await self._emit(ToolDenied(session_id=self.id, turn_id=turn_id, call_id=call.id, reason=why))
+            return ToolResultBlock(tool_use_id=call.id, content=f'Not permitted: {why}', is_error=True)
+
+        await self._emit(
+            ToolProposed(
+                session_id=self.id,
+                turn_id=turn_id,
+                call=call,
+                needs_approval=decision is Decision.ASK,
+            )
+        )
+
+        if decision is Decision.ASK and call.name != 'ask_user':
+            allowed, reason, remember = await self._await_approval(call.id)
+            if not allowed:
+                call.status = ToolStatus.DENIED
+                await self._emit(
+                    ToolDenied(session_id=self.id, turn_id=turn_id, call_id=call.id, reason=reason)
+                )
+                return ToolResultBlock(
+                    tool_use_id=call.id, content=_denial_text(call, reason), is_error=True
+                )
+            if remember:
+                self.policy.remember(call)
+
+        return await self._execute(turn_id, tool, call, ctx)
 
     async def _execute(self, turn_id: str, tool: Tool, call: ToolCall, ctx: ToolContext) -> ToolResultBlock:
         call.status = ToolStatus.RUNNING

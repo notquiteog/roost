@@ -19,6 +19,14 @@
   <symbol id="i-mic" viewBox="0 0 16 16"><rect x="6" y="2" width="4" height="7" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"/><path d="M8 12v2"/></symbol>
   <symbol id="i-send" viewBox="0 0 16 16"><path d="M8 12.5v-9"/><path d="M4.5 7 8 3.5 11.5 7"/></symbol>
   <symbol id="i-chat" viewBox="0 0 16 16"><path d="M13.5 8.5c0 2.2-2.5 4-5.5 4a7 7 0 0 1-1.6-.2L3 13.5l.8-2.3A4.3 4.3 0 0 1 2.5 8.5c0-2.2 2.5-4 5.5-4s5.5 1.8 5.5 4Z"/></symbol>
+  <symbol id="i-code" viewBox="0 0 16 16"><path d="M5.5 4.5 2 8l3.5 3.5"/><path d="M10.5 4.5 14 8l-3.5 3.5"/><path d="M9.2 3 6.8 13"/></symbol>
+  <symbol id="i-wave" viewBox="0 0 16 16"><path d="M2 8h1.5"/><path d="M5 5.5v5"/><path d="M7.5 3v10"/><path d="M10 5.5v5"/><path d="M12.5 6.8v2.4"/><path d="M14.5 8H14"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 16 16"><path d="M8.8 2 4 9h3.4l-.6 5L12 7H8.4z"/></symbol>
+  <symbol id="i-screen" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="8.5" rx="1.5"/><path d="M6 13.5h4"/></symbol>
+  <symbol id="i-wand" viewBox="0 0 16 16"><path d="M3 13 11 5"/><path d="m10 3 .7 1.8L12.5 5.5l-1.8.7L10 8l-.7-1.8L7.5 5.5l1.8-.7z"/><path d="M13.5 9.5 14 11l1.5.5-1.5.5-.5 1.5-.5-1.5L11 11l1.5-.5z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 16 16"><path d="M6 2v4"/><path d="M10 2v4"/><path d="M4 6h8v2.5A4 4 0 0 1 8 12.5 4 4 0 0 1 4 8.5z"/><path d="M8 12.5V14.5"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 16 16"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/></symbol>
 </svg>
 
 <aside id="sidebar">
@@ -31,6 +39,30 @@
       <svg class="ic"><use href="#i-new"></use></svg>
     </button>
   </header>
+
+  <!-- The five things this can be. One at a time, because they are different
+       kinds of attention rather than panels: you are either typing, talking,
+       watching, or making something. -->
+  <nav id="modes" aria-label="Mode">
+    <button class="nav-row mode" data-mode="code" aria-current="true">
+      <svg class="ic"><use href="#i-code"></use></svg><span>Code</span>
+    </button>
+    <button class="nav-row mode" data-mode="talk">
+      <svg class="ic"><use href="#i-wave"></use></svg><span>Talk</span>
+    </button>
+    <button class="nav-row mode" data-mode="live">
+      <svg class="ic"><use href="#i-bolt"></use></svg><span>Live</span>
+    </button>
+    <button class="nav-row mode" data-mode="watch">
+      <svg class="ic"><use href="#i-screen"></use></svg><span>Autopilot</span>
+    </button>
+    <button class="nav-row mode" data-mode="studio">
+      <svg class="ic"><use href="#i-wand"></use></svg><span>Studio</span>
+    </button>
+    <button class="nav-row mode" data-mode="search">
+      <svg class="ic"><use href="#i-search"></use></svg><span>Search</span>
+    </button>
+  </nav>
 
   <nav id="nav">
     <button class="nav-row" id="nav-new">
@@ -54,6 +86,9 @@
       <span>Providers</span><span class="chev">›</span>
     </button>
     <div id="providers" aria-label="Providers" hidden></div>
+    <button class="nav-row" id="open-connections">
+      <svg class="ic"><use href="#i-plug"></use></svg><span>Connections</span>
+    </button>
   </footer>
 </aside>
 
@@ -62,6 +97,13 @@
     <div id="session-title">No session</div>
     <span id="session-meta" class="meta"></span>
     <div class="spacer"></div>
+    <!-- One button, and it does the whole thing: switches the app to talking,
+         opens the microphone, and starts listening. Nothing else to set up,
+         because a mode you have to configure before you can speak is a mode
+         you use once. Pressing it again puts you back where you were. -->
+    <button id="talk-button" class="talk-button" title="Talk to it instead (one button — opens the microphone)">
+      <svg class="ic"><use href="#i-wave"></use></svg><span>Talk</span>
+    </button>
     <span id="diffstat" class="diffstat" hidden></span>
     <button id="rewind" class="icon" hidden title="Undo the agent's file changes">
       <svg class="ic"><use href="#i-undo"></use></svg>
@@ -135,6 +177,160 @@
   </form>
 
   <div id="starters" hidden></div>
+
+  <!-- ------------------------------------------------------------ talk -->
+  <!-- Nothing to type into, deliberately. The whole surface is one control
+       and one transcript of what was said, because a mode whose promise is
+       "just talk to it" that still shows a text box is a mode people type
+       into. -->
+  <section id="pane-talk" class="pane" hidden>
+    <div class="talk-stage">
+      <div id="talk-pet" class="talk-pet"></div>
+      <button id="talk-orb" class="orb" aria-live="polite">
+        <span class="orb-ring"></span>
+        <span id="talk-label">Start talking</span>
+      </button>
+      <p id="talk-state" class="meta">The microphone is off.</p>
+      <p id="talk-heard" class="talk-heard"></p>
+    </div>
+    <div id="talk-log" class="talk-log" role="log" aria-live="polite"></div>
+    <div class="talk-foot">
+      <label class="chip">
+        <input type="checkbox" id="talk-acts"> can act on the machine
+      </label>
+      <span id="talk-route" class="chip flat"></span>
+      <div class="spacer"></div>
+      <button id="talk-mute" class="ghost small" disabled>Mute</button>
+      <button id="talk-stop" class="ghost small" disabled>Stop talking</button>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ live -->
+  <section id="pane-live" class="pane" hidden>
+    <div class="talk-stage">
+      <div id="live-pet" class="talk-pet"></div>
+      <button id="live-orb" class="orb live" aria-live="polite">
+        <span class="orb-ring"></span>
+        <span id="live-label">Go live</span>
+      </button>
+      <p id="live-state" class="meta">Speech to speech, one model, no transcript in the middle.</p>
+      <p id="live-heard" class="talk-heard"></p>
+    </div>
+    <div id="live-log" class="talk-log" role="log" aria-live="polite"></div>
+    <div class="talk-foot">
+      <label class="chip">
+        <input type="checkbox" id="live-acts" checked> can act on the machine
+      </label>
+      <span id="live-model" class="chip flat"></span>
+      <div class="spacer"></div>
+      <button id="live-stop" class="ghost small" disabled>End</button>
+    </div>
+    <p class="explain warn live-note">
+      This one is OpenAI's, and only OpenAI's: it cannot run on your own hardware, and
+      everything said in the room goes to them for as long as it is open. The ordinary
+      Talk mode routes dictation, thinking and speech separately, so each of those can
+      stay on your machine.
+    </p>
+  </section>
+
+  <!-- --------------------------------------------------------- autopilot -->
+  <section id="pane-watch" class="pane" hidden>
+    <form id="watch-start" class="watch-start">
+      <h2>Give it something to do</h2>
+      <textarea id="watch-goal" rows="3"
+        placeholder="Book a hotel in Tbilisi for the 14th to the 21st of October, two people, under 120 a night — show me the options before booking anything"></textarea>
+      <div class="watch-controls">
+        <label class="chip">Approval
+          <select id="watch-mode">
+            <option value="ask">ask first</option>
+            <option value="auto_edit">auto edit</option>
+            <option value="trusted" selected>trusted</option>
+            <option value="unrestricted">unrestricted</option>
+          </select>
+        </label>
+        <label class="chip" title="Only if you want it using the screen you are looking at">
+          <input type="checkbox" id="watch-share"> use my screen
+        </label>
+        <div class="spacer"></div>
+        <button id="watch-go" class="primary" type="submit">Start</button>
+      </div>
+      <p class="explain">
+        It gets a screen of its own — its own pointer, its own keyboard, its own windows —
+        so you keep using your computer while you watch. Tick "use my screen" only if you
+        want it driving the mouse on your desk.
+      </p>
+    </form>
+
+    <div id="watch-live" class="watch-live" hidden>
+      <div class="watch-screen">
+        <img id="watch-frame" alt="what the agent is looking at">
+        <div id="watch-offline" class="watch-offline" hidden>waiting for the first frame…</div>
+      </div>
+      <aside class="watch-side">
+        <div class="watch-head">
+          <span id="watch-goal-text" class="what"></span>
+          <span id="watch-stage" class="pill"></span>
+        </div>
+        <div id="watch-narration" class="watch-narration" role="log" aria-live="polite"></div>
+        <div class="watch-foot">
+          <div id="watch-pet" class="mini"></div>
+          <span id="watch-doing" class="meta">starting…</span>
+          <div class="spacer"></div>
+          <button id="watch-stop" class="danger small">Stop</button>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------------- studio -->
+  <section id="pane-studio" class="pane" hidden>
+    <div class="studio">
+      <form id="studio-form" class="studio-form">
+        <div class="studio-kind">
+          <button type="button" class="seg on" data-kind="image">Image</button>
+          <button type="button" class="seg" data-kind="video">Video</button>
+        </div>
+        <label class="field">
+          <span>Prompt</span>
+          <textarea id="studio-prompt" rows="4" placeholder="What should it make?"></textarea>
+        </label>
+        <div class="studio-route">
+          <label class="chip">Provider <select id="studio-provider"></select></label>
+          <label class="chip">Model <select id="studio-model"></select></label>
+        </div>
+        <div id="studio-params" class="studio-params"></div>
+        <button type="button" id="studio-advanced" class="ghost small" aria-expanded="false">
+          Everything else ›
+        </button>
+        <div id="studio-advanced-params" class="studio-params" hidden></div>
+        <div class="studio-go">
+          <button id="studio-make" class="primary" type="submit">Make it</button>
+          <span id="studio-status" class="meta"></span>
+        </div>
+      </form>
+      <div class="studio-out">
+        <div id="studio-gallery" class="gallery"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------------- search -->
+  <section id="pane-search" class="pane" hidden>
+    <form id="search-form" class="search-form">
+      <input id="search-q" placeholder="Search the web" autocomplete="off">
+      <button class="primary" type="submit">Search</button>
+    </form>
+    <p id="search-meta" class="meta search-meta"></p>
+    <div id="search-results" class="search-results"></div>
+    <article id="search-reader" class="search-reader" hidden>
+      <header>
+        <span id="reader-title"></span>
+        <div class="spacer"></div>
+        <button id="reader-close" class="ghost small">Close</button>
+      </header>
+      <pre id="reader-body"></pre>
+    </article>
+  </section>
 </main>
 
 <dialog id="new-dialog">
@@ -203,6 +399,58 @@
     <button id="mem-wipe" class="danger">Forget everything</button>
     <div class="spacer"></div>
     <button id="mem-close" class="ghost">Close</button>
+  </menu>
+</dialog>
+
+<dialog id="connections-dialog">
+  <h2>Connections</h2>
+  <p class="explain">
+    What answers each kind of request. Chat and embedding are chosen separately on
+    purpose: the model you think with and the model you remember with are different
+    decisions, and they send different things to different places.
+  </p>
+
+  <div id="conn-routes" class="conn-routes"></div>
+
+  <div class="sec-head"><span>Connected</span></div>
+  <ul id="conn-list" class="conn-list"></ul>
+
+  <div class="sec-head"><span>Add</span></div>
+  <form id="conn-add" class="conn-add">
+    <label class="field">
+      <span>Service</span>
+      <select id="conn-host"></select>
+    </label>
+    <p id="conn-note" class="explain"></p>
+    <label class="field">
+      <span>Address</span>
+      <input id="conn-url" placeholder="https://…">
+    </label>
+    <label class="field">
+      <span>Key <em>— kept in a file on this machine, never sent back to this page</em></span>
+      <input id="conn-key" type="password" autocomplete="off" placeholder="leave blank if it needs none">
+    </label>
+    <label class="switch">
+      <input type="checkbox" id="conn-local">
+      <span>This runs on hardware I control
+        <em>— decides whether "local only" will accept it</em></span>
+    </label>
+    <label class="switch">
+      <input type="checkbox" id="conn-tor">
+      <span>Reach it through Tor
+        <em id="conn-tor-note">— checked before saving; if the proxy is not there, this is refused
+        rather than saved and quietly ignored</em></span>
+    </label>
+    <menu>
+      <span id="conn-status" class="meta"></span>
+      <div class="spacer"></div>
+      <button type="submit" class="primary">Connect</button>
+    </menu>
+  </form>
+
+  <menu>
+    <div class="spacer"></div>
+    <button id="conn-close" class="ghost">Close</button>
   </menu>
 </dialog>
 

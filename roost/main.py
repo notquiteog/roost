@@ -15,9 +15,12 @@ from roost.config import config
 from roost.providers.bootstrap import bootstrap
 from roost.providers.registry import registry
 from roost.routers import agent as agent_router
+from roost.routers import autopilot as autopilot_router
 from roost.routers import media as media_router
 from roost.routers import memory as memory_router
 from roost.routers import providers as providers_router
+from roost.routers import realtime as realtime_router
+from roost.routers import search as search_router
 from roost.routers import voice as voice_router
 
 log = logging.getLogger(__name__)
@@ -87,6 +90,10 @@ app.include_router(voice_router.router)
 app.include_router(providers_router.router)
 app.include_router(memory_router.router)
 app.include_router(media_router.router)
+app.include_router(search_router.router)
+app.include_router(realtime_router.router)
+app.include_router(autopilot_router.router)
+app.include_router(autopilot_router.http)
 
 
 STATIC = Path(__file__).parent / 'static'
