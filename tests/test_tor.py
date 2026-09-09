@@ -226,11 +226,25 @@ def _scan(root: Path):
 
 
 def _outbound_calls():
-    """Everything in this package that opens a socket, with the scan checked."""
+    """Everything in this package that opens a socket, with the scan checked.
+
+    Both floors are asserted *here* rather than in a test of their own, and
+    that placement is the point. Every check below filters this list and
+    asserts the result is empty — which is exactly what an empty input
+    produces. Leaving the vacuity check in a sibling test means those
+    assertions are only meaningful because something else happens to be
+    watching, and an assertion that depends on another test to mean anything
+    is not one you can rely on when the other test is what changes.
+    """
     found = list(_scan(_package_root()))
     assert _scan.last_file_count >= _MIN_FILES, (
         f'only {_scan.last_file_count} python files were scanned, which is not this package — '
         'the guard is looking in the wrong place and would pass by having nothing to check'
+    )
+    assert len(found) >= _MIN_CALLS, (
+        f'the scan found only {len(found)} outbound calls in a package that certainly has '
+        'more — the match set has probably stopped matching, and every check that filters '
+        'this list is about to pass on an empty one'
     )
     return found
 
@@ -318,22 +332,32 @@ def test_an_exemption_does_not_reach_past_the_code_above_it(tmp_path):
     assert found[0][3] is None, 'the exemption reached past the code it was attached to'
 
 
-def test_the_guard_is_actually_looking_at_something():
-    """The failure mode of a check like this is not being wrong. It is being
-    vacuous — scanning an empty directory, or matching nothing because the
-    pattern broke — and reporting success, which is indistinguishable from
-    passing right up until the day it was meant to catch something.
+def test_the_guard_notices_when_it_is_looking_at_nothing(tmp_path, monkeypatch):
+    """The floors in `_outbound_calls` are the thing under test here.
 
-    So the guard has to prove it can still see: the package is where it thinks
-    it is, it scanned a plausible number of files, and it found the calls that
-    are definitely there.
+    A guard's failure mode is not being wrong. It is being vacuous — scanning
+    an empty directory, or matching nothing because the pattern broke — and
+    reporting success, which is indistinguishable from passing right up until
+    the day it was meant to catch something. So both floors are exercised
+    against a tree that would trip them, rather than trusted because they are
+    written down.
     """
-    found = list(_outbound_calls())
-    assert len(found) >= _MIN_CALLS, (
-        f'the scan found only {len(found)} outbound calls in a package that certainly has '
-        'more — the match set has probably stopped matching, and every check below it is '
-        'passing on an empty list'
-    )
+    monkeypatch.setattr('tests.test_tor._package_root', lambda: tmp_path)
+    with pytest.raises(AssertionError, match='looking in the wrong place'):
+        _outbound_calls()
+
+    # Enough files to clear the first floor, so the second is what answers.
+    for n in range(_MIN_FILES + 1):
+        (tmp_path / f'm{n}.py').write_text('x = 1\n')
+    with pytest.raises(AssertionError, match='stopped matching'):
+        _outbound_calls()
+
+
+def test_a_dead_match_set_does_not_pass_quietly(monkeypatch):
+    """The other half: the right files, and a pattern that recognises nothing."""
+    monkeypatch.setattr('tests.test_tor._OPENS_A_CONNECTION', {'nothing.at.all'})
+    with pytest.raises(AssertionError, match='stopped matching'):
+        _outbound_calls()
 
 
 def test_nothing_opens_its_own_connection_without_saying_why():
