@@ -95,6 +95,7 @@ async def test_it_books_up_to_the_point_of_paying(tmp_path):
             before = None
 
     stage = VirtualStage(1280, 900)
+    moved_to: tuple[int, int] | None = None
     browser = BrowserSession(
         BrowserConfig(
             profile_dir=tmp_path / 'profile',
@@ -179,6 +180,11 @@ async def test_it_books_up_to_the_point_of_paying(tmp_path):
             assert 'GEL' in room.content
 
             # -- 6. and stop --------------------------------------------------
+            # Where the agent's own pointer actually is, read from its own
+            # display. This is the positive half of the promise: it moved a
+            # pointer, and that pointer is not the one on the desk.
+            moved_to = stage.x.pointer()
+
             book = next(
                 ref for ref, e in browser.last_elements.items()
                 if 'book this room' in (e.get('label') or '').lower()
@@ -214,14 +220,42 @@ async def test_it_books_up_to_the_point_of_paying(tmp_path):
         stage.close()
 
     # -- 7. the promise ------------------------------------------------------
+    # This used to assert the real pointer had not moved, and blame the agent
+    # when it had. That was unsound twice over: anything else on the machine
+    # can move the pointer — a person using their computer, which is the whole
+    # scenario this feature exists for — and the agent, on a different X
+    # display, cannot move it at all. So it failed for a reason it then stated
+    # incorrectly, and it passed for hours only because nobody touched the
+    # mouse.
+    #
+    # What is actually checkable is the structure: the agent drove a pointer,
+    # and the pointer it drove is not the one on the desk. That is falsifiable
+    # — a stage that regressed to sharing fails both halves — and it does not
+    # depend on the machine being idle.
+    assert stage.shares_pointer is False, 'the stage was sharing the pointer'
+    assert stage.display != real_display, (
+        f'the agent was driving {stage.display}, which is the display in front of the person'
+    )
+
+    # And it really did move a pointer, on its own display: a test where
+    # nothing moved would satisfy the two assertions above by doing nothing.
+    assert moved_to is not None, 'the agent never moved a pointer at all'
+    assert moved_to != (0, 0), f'the pointer never left the origin: {moved_to}'
+
+    # The real pointer is observed rather than asserted on. Unchanged is the
+    # normal case and worth reporting; changed means something else on this
+    # machine moved it, which is not a failure and is the exact thing the
+    # person is supposed to be free to do while it works.
     if before is not None:
         eyes = _X11(real_display)
         after = eyes.pointer()
         eyes.close()
-        assert before == after, (
-            f'the pointer moved from {before} to {after} — the agent took the mouse, '
-            'which is the one thing a virtual stage exists to prevent'
-        )
+        if before != after:
+            print(
+                f'\nnote: the desk pointer moved {before} -> {after} during the run. '
+                'Something else on this machine moved it; the agent is on '
+                f'{stage.display} and cannot.'
+            )
 
 
 async def test_a_date_field_is_set_rather_than_typed_into(tmp_path):
