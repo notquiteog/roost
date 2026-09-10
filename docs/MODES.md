@@ -36,6 +36,30 @@ Barge-in works the way it does everywhere else in Roost: talk over it and the
 synthesis is killed server-side, the client drops what it has buffered, and
 the history records only what you actually heard.
 
+**It speaks its questions, and says when it is waiting.** This was the mode's
+worst failure for a while: only assistant prose was spoken, so when the agent
+asked something or stopped for an approval the call simply went quiet, and
+somebody not looking at a screen had no way to know the machine was waiting on
+them. Both are now said out loud, with the options read out — on a screen they
+are buttons, and in a voice call they are the only way to know what answers
+are accepted.
+
+The reply goes back to the thing that is waiting rather than starting a new
+turn. Answering out loud while it is still reading the question out stops the
+speech and keeps the turn, because cancelling there would throw away the work
+the answer was about to unblock.
+
+**Nothing is ever guessed.** "Go" and "no" are one phoneme apart, and
+"don't do it" contains "do it" — so a refusal wins whenever both appear, and
+anything that is neither is repeated back rather than resolved to the likelier
+reading. Refusing an ambiguous utterance costs a repeat; approving one costs
+whatever the tool was about to do.
+
+**Money and secrets need a word that is not a mishearing.** A bare "yes" will
+not spend anything: those need "confirm", which is not a word that turns up in
+conversation by accident and is not a plausible mistranscription of "no". It
+says so when it asks, not after.
+
 `Ctrl+Shift+T` from anywhere. `Escape` stops whatever is talking.
 
 ## Live

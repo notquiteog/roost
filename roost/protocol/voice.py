@@ -173,6 +173,39 @@ class SynthesisCancelled(_VEvent):
     reason: Literal['barge_in', 'client', 'error'] = 'barge_in'
 
 
+class VoiceWaiting(_VEvent):
+    """The turn has stopped and is waiting on the person.
+
+    Sent as well as spoken. The speech is what someone not looking at the
+    screen needs; this is what a screen shows — and a client that reconnects
+    mid-suspension has no other way to know the call is waiting rather than
+    idle.
+    """
+
+    type: Literal['voice.waiting'] = 'voice.waiting'
+    # 'question' — the agent asked something. 'approval' — a tool needs a yes.
+    kind: str
+    prompt: str = ''
+    options: list[str] = Field(default_factory=list)
+    # True for money and secrets, where the affirmative must be "confirm".
+    strict: bool = False
+    risk: str = ''
+
+
+class VoiceAnswered(_VEvent):
+    """What a spoken reply was taken to mean.
+
+    Emitted for every attempt including the ones that were not understood,
+    because "it did not hear you" and "it heard you and did nothing" look
+    identical from outside and want very different reactions.
+    """
+
+    type: Literal['voice.answered'] = 'voice.answered'
+    kind: str
+    heard: str
+    understood: str        # 'yes' | 'no' | 'unclear' | 'answer'
+
+
 class VoiceError(_VEvent):
     type: Literal['voice.error'] = 'voice.error'
     message: str
@@ -180,6 +213,6 @@ class VoiceError(_VEvent):
 
 
 VoiceEvent = Annotated[
-    VoiceReady | SpeechStarted | SpeechStopped | TranscriptPartial | TranscriptFinal | AssistantTextDelta | SynthesisStarted | SynthesisStopped | SynthesisCancelled | VoiceError,
+    VoiceReady | VoiceWaiting | VoiceAnswered | SpeechStarted | SpeechStopped | TranscriptPartial | TranscriptFinal | AssistantTextDelta | SynthesisStarted | SynthesisStopped | SynthesisCancelled | VoiceError,
     Field(discriminator='type'),
 ]

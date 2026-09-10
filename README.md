@@ -28,7 +28,7 @@ one, and watching one work are different kinds of attention:
 | | |
 |---|---|
 | **Code** | type back and forth, with tool cards, diffs and approvals |
-| **Talk** | one button, and then only your voice |
+| **Talk** | one button, and then only your voice — it speaks its questions and says when it is waiting |
 | **Live** | OpenAI's realtime API — speech to speech, no text in the middle |
 | **Autopilot** | a goal and a live view of a screen it is driving. No chat |
 | **Studio** | images and video, with every knob the backend actually has |

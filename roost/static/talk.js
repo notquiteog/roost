@@ -107,6 +107,26 @@ export async function startTalking() {
       companion.set('idle');
       setState('Listening.');
     },
+    waiting: (ev) => {
+      // Said out loud already; this is the same thing for anyone who is
+      // looking. The orb stops pulsing so a glance tells you it is your turn.
+      companion.set('waiting');
+      $('#talk-orb').classList.add('asking');
+      const how = ev.strict ? 'Say "confirm", or "no".' : 'Say "yes", or "no".';
+      setState(ev.kind === 'question' ? ev.prompt : `${ev.prompt} — ${how}`);
+      note(ev.kind === 'question' ? `asked: ${ev.prompt}` : `waiting on you: ${ev.prompt}`);
+    },
+    answered: (ev) => {
+      if (ev.understood === 'unclear') {
+        // Deliberately distinguished from silence: "it did not hear you" and
+        // "it heard you and did nothing" want very different reactions.
+        note(`heard "${ev.heard}" — not a yes or a no, so nothing was done`);
+        return;
+      }
+      $('#talk-orb').classList.remove('asking');
+      note(ev.understood === 'answer' ? `answered: ${ev.heard}` : `you said ${ev.understood}`);
+      companion.set('thinking');
+    },
     error: (message) => {
       note(`error: ${message}`);
       companion.flash('error');

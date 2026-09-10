@@ -34,6 +34,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from roost.protocol.agent import Risk
 from roost.protocol.voice import (
     AssistantTextDelta,
     SpeechStarted,
@@ -42,9 +43,12 @@ from roost.protocol.voice import (
     SynthesisStarted,
     SynthesisStopped,
     TranscriptFinal,
+    VoiceAnswered,
     VoiceError,
+    VoiceWaiting,
 )
 from roost.providers.base import ChatRequest, Message, StreamText, TextBlock
+from roost.voice.answers import Answer, how_to_answer, interpret
 from roost.voice.vad import Ringbuffer, Vad, VadConfig, VadEvent
 
 log = logging.getLogger(__name__)
@@ -123,6 +127,48 @@ def is_meaningful(text: str) -> bool:
     return bool(words) and not all(w in FILLERS for w in words)
 
 
+@dataclass(slots=True)
+class Waiting:
+    """What the agent is suspended on, while it is.
+
+    `strict` is set for anything that spends money or types a secret: the
+    affirmative then has to be the word "confirm", because a bare "yes" is one
+    transcription error away from a purchase and "yes" is a word people say
+    while thinking.
+    """
+
+    kind: str                       # 'question' | 'approval'
+    id: str
+    strict: bool = False
+    summary: str = ''
+    options: list[str] = field(default_factory=list)
+
+
+def _spoken_question(question: str, options: list[str]) -> str:
+    """A question, as something to hear rather than read.
+
+    The options are read out because on a screen they are buttons and in a
+    voice call they are the only way to know what the accepted answers are.
+    Capped, since a list of nine read aloud is worse than none.
+    """
+    said = question.strip()
+    if options and len(options) <= 4:
+        said += ' You can say: ' + ', or '.join(o.strip() for o in options) + '.'
+    elif options:
+        said += f' There are {len(options)} options on screen, or just tell me what you want.'
+    return said
+
+
+def _spoken_approval(summary: str, strict: bool) -> str:
+    """The sentence that stops a voice call going quiet on an approval."""
+    what = summary.strip() or 'do something that needs your permission'
+    lead = (
+        'This one spends money or enters a secret' if strict
+        else 'This one needs your say-so'
+    )
+    return f'{lead}: {what}. {how_to_answer(strict)}'
+
+
 @dataclass
 class VoiceConfig:
     sample_rate: int = 16_000
@@ -177,6 +223,12 @@ class VoiceSession:
 
         self._reply: asyncio.Task[None] | None = None
         self._utterance_id: str | None = None
+        # What the agent is suspended on, when it is: a question it asked, or
+        # a tool waiting to be approved. While this is set the next thing the
+        # person says is an *answer* rather than a new instruction — otherwise
+        # they reply to a question and it becomes a fresh turn while the agent
+        # sits waiting for something nobody is going to send.
+        self._awaiting: Waiting | None = None
         # What has actually been played to the person for the current
         # utterance, so an interruption can be recorded truthfully.
         self._spoken: list[str] = []
@@ -221,7 +273,13 @@ class VoiceSession:
 
             # The decisive moment: they started talking while it was talking.
             if self.is_speaking:
-                await self._cancel_reply('barge_in')
+                if self._awaiting is not None:
+                    # Answering a question it is still reading out. Stop the
+                    # audio, keep the turn: cancelling here would throw away
+                    # the very work the answer is meant to unblock.
+                    await self._silence('barge_in')
+                else:
+                    await self._cancel_reply('barge_in')
 
             self._capturing = True
             # Pre-roll first, so the utterance starts before the detector did.
@@ -271,8 +329,68 @@ class VoiceSession:
             await self.emit_event(TranscriptFinal(text=text, submitted=False))
             return
 
+        if self._awaiting is not None:
+            await self.emit_event(TranscriptFinal(text=text, submitted=True))
+            await self._answer(text)
+            return
+
         await self.emit_event(TranscriptFinal(text=text, submitted=True))
         await self.say(text)
+
+    async def _answer(self, said: str) -> None:
+        """Give a spoken reply to whatever the agent is suspended on.
+
+        Deliberately does not touch the reply task. The generator driving the
+        agent is still running and still consuming its events — cancelling it
+        here would abandon a turn that is one answer away from finishing.
+        """
+        waiting = self._awaiting
+        if waiting is None or self.agent is None:
+            return
+
+        if waiting.kind == 'question':
+            self._awaiting = None
+            await self.emit_event(
+                VoiceAnswered(kind='question', heard=said, understood='answer')
+            )
+            self.agent.answer(waiting.id, said)
+            return
+
+        verdict = interpret(said, strict=waiting.strict)
+        await self.emit_event(
+            VoiceAnswered(kind='approval', heard=said, understood=verdict.value)
+        )
+
+        if verdict is Answer.UNCLEAR:
+            # Never guessed. "Go" and "no" are one phoneme apart, and the
+            # likelier reading is not a good enough reason to spend money.
+            # The question stays open and is asked again.
+            await self.say_aloud(
+                f'Sorry, I did not catch that. {how_to_answer(waiting.strict)}'
+            )
+            return
+
+        self._awaiting = None
+        if verdict is Answer.YES:
+            self.agent.approve(waiting.id, remember=False)
+        else:
+            self.agent.deny(waiting.id, 'declined out loud')
+
+    async def say_aloud(self, text: str) -> None:
+        """Speak one sentence without starting a turn.
+
+        For the things this end says on its own behalf — "I did not catch
+        that" — which must not become a message to the model or cancel a turn
+        that is suspended waiting for an answer.
+        """
+        utterance_id = uuid.uuid4().hex[:12]
+        await self.emit_event(SynthesisStarted(utterance_id=utterance_id))
+        previous, self._utterance_id = self._utterance_id, utterance_id
+        try:
+            await self._speak(utterance_id, text)
+        finally:
+            self._utterance_id = previous
+        await self.emit_event(SynthesisStopped(utterance_id=utterance_id))
 
     async def say(self, text: str) -> None:
         """Take a turn from text, as if it had been spoken."""
@@ -301,6 +419,15 @@ class VoiceSession:
                 sentences, buffer = split_sentences(buffer)
                 for sentence in sentences:
                     await self._speak(utterance_id, sentence)
+
+                # A suspended turn has no end for the tail to be flushed at:
+                # the generator is still open, waiting on a person. Without
+                # this the last sentence stays in the buffer — and the last
+                # sentence is the one saying how to answer, so they would hear
+                # "this one spends money: place the order" and then silence.
+                if self._awaiting is not None and buffer.strip():
+                    await self._speak(utterance_id, buffer.strip())
+                    buffer = ''
 
             # Whatever is left when the model stops, terminated or not.
             if buffer.strip():
@@ -354,13 +481,27 @@ class VoiceSession:
             yield event
 
     async def _generate_via_agent(self):
-        """Drive an agent session and speak its prose.
+        """Drive an agent session and speak its prose — and its silences.
 
-        Only assistant text is spoken. Reasoning, tool calls and tool output
-        are not: reading a tool's output aloud is unbearable, and the approval
-        prompts belong on screen where they can be read before being answered.
+        Reasoning and tool output are still not spoken: reading a build log
+        aloud is unbearable. What *is* spoken now is the two things that
+        suspend a turn, because this used to be the mode's worst failure. The
+        agent would ask a question or stop for an approval, only `TextDelta`
+        was being spoken, and the call simply went quiet — leaving somebody
+        who is not looking at a screen listening to nothing, with no way to
+        know the machine was waiting on them.
+
+        The generator does not stop when the turn suspends. It keeps consuming
+        events, so the agent stays alive on its future and the rest of the
+        turn arrives once an answer does.
         """
-        from roost.protocol.agent import TextDelta, TurnCompleted
+        from roost.protocol.agent import (
+            QuestionAsked,
+            TextDelta,
+            ToolDenied,
+            ToolProposed,
+            TurnCompleted,
+        )
 
         last = self.history[-1]
         text = ' '.join(b.text for b in last.content if isinstance(b, TextBlock))
@@ -369,6 +510,35 @@ class VoiceSession:
         async for event in self.agent.events():
             if isinstance(event, TextDelta):
                 yield StreamText(text=event.text)
+
+            elif isinstance(event, QuestionAsked):
+                self._awaiting = Waiting(
+                    kind='question', id=event.question_id, options=list(event.options)
+                )
+                await self.emit_event(
+                    VoiceWaiting(kind='question', prompt=event.question, options=event.options)
+                )
+                yield StreamText(text=' ' + _spoken_question(event.question, event.options))
+
+            elif isinstance(event, ToolProposed) and event.needs_approval:
+                strict = event.call.risk in (Risk.PURCHASE, Risk.CREDENTIAL)
+                self._awaiting = Waiting(
+                    kind='approval', id=event.call.id, strict=strict, summary=event.call.summary
+                )
+                await self.emit_event(
+                    VoiceWaiting(
+                        kind='approval', prompt=event.call.summary, strict=strict,
+                        risk=event.call.risk.value,
+                    )
+                )
+                yield StreamText(text=' ' + _spoken_approval(event.call.summary, strict))
+
+            elif isinstance(event, ToolDenied):
+                # Said aloud so a "no" is acknowledged. Without it the only
+                # evidence the refusal landed is the absence of the thing.
+                if self._awaiting is None:
+                    yield StreamText(text=" Right, I won't.")
+
             elif isinstance(event, TurnCompleted):
                 break
 
@@ -400,6 +570,18 @@ class VoiceSession:
 
     # -- interruption -------------------------------------------------------
 
+    async def _silence(self, reason: str) -> None:
+        """Stop what is being said without stopping what is being done.
+
+        Bumping the utterance id is what makes an in-flight synthesis drop its
+        remaining chunks — see `_speak`, which checks it per chunk — so this
+        is the whole of "be quiet" separated from "give up".
+        """
+        utterance_id = self._utterance_id
+        self._utterance_id = None
+        if utterance_id:
+            await self.emit_event(SynthesisCancelled(utterance_id=utterance_id, reason=reason))
+
     async def _cancel_reply(self, reason: str) -> None:
         task, utterance_id = self._reply, self._utterance_id
         # Cleared before awaiting, so any synthesis still in flight sees the
@@ -416,6 +598,11 @@ class VoiceSession:
 
         if utterance_id:
             await self.emit_event(SynthesisCancelled(utterance_id=utterance_id, reason=reason))
+
+        # A turn that has been thrown away is not waiting for an answer, and
+        # leaving this set would route the person's next sentence into a
+        # question that no longer exists.
+        self._awaiting = None
 
     async def interrupt(self) -> None:
         if self.is_speaking:

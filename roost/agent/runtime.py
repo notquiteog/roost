@@ -159,8 +159,13 @@ def build_session(
     memory: Any = None,
     user_id: str = '',
     confined: bool = True,
-    allow_purchases: bool = False,
-    allow_credentials: bool = False,
+    # None means "whatever ApprovalPolicy says", which is the only place the
+    # default should live. Repeating it here is how these two ended up
+    # meaning `False` after the policy changed — and under the new policy
+    # `False` is a refusal rather than a prompt, so every session built
+    # without an explicit config silently lost the ability to buy anything.
+    allow_purchases: bool | None = None,
+    allow_credentials: bool | None = None,
     web: Any = None,
     browser: Any = None,
     stage: Any = None,
@@ -174,11 +179,15 @@ def build_session(
     if not root_path.is_dir():
         raise ValueError(f'{root_path}: working root is not a directory')
 
-    policy = ApprovalPolicy(
-        mode=Mode(mode),
-        allow_purchases=allow_purchases,
-        allow_credentials=allow_credentials,
-    )
+    permissions = {
+        name: value
+        for name, value in (
+            ('allow_purchases', allow_purchases),
+            ('allow_credentials', allow_credentials),
+        )
+        if value is not None
+    }
+    policy = ApprovalPolicy(mode=Mode(mode), **permissions)
     chosen = tools if tools is not None else default_tools()
 
     # In read-only mode the tools that can change things are left out entirely

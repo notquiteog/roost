@@ -201,6 +201,12 @@ export class Voice {
         break;
 
       case 'speech.stopped': this.fire('finished'); break;
+
+      // The turn has stopped and is waiting on the person. It is spoken as
+      // well — that is the point of it — but a client that reconnects
+      // mid-suspension has no other way to tell waiting from idle.
+      case 'voice.waiting': this.fire('waiting', ev); break;
+      case 'voice.answered': this.fire('answered', ev); break;
       case 'voice.error': this.fire('error', ev.message); break;
     }
   }

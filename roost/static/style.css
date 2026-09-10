@@ -836,6 +836,11 @@ body.mode-talk .talk-button, body.mode-live .talk-button {
   .orb.on .orb-ring { animation: none; opacity: .5; }
 }
 
+/* Waiting on a person looks different from working: the ring stops moving
+   and the edge warms, so a glance says "it is your turn" without reading. */
+.orb.asking { border-color: color-mix(in srgb, var(--warn) 60%, transparent); color: var(--warn); }
+.orb.asking .orb-ring { animation: none; opacity: .55; border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+
 .talk-heard {
   min-height: 20px; margin: 0; text-align: center; max-width: 620px;
   color: var(--dim); font-size: 15px;
