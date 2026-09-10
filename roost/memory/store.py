@@ -2,12 +2,17 @@
 
 Three decisions shape this file.
 
-**SQLite and a full scan, not a vector database.** Roost is a client on one
-person's machine — there are no accounts and there is not going to be a
-multi-tenant install — so the store holds one person's memories, which number
-in the thousands. At that size an approximate index buys nothing measurable and
-costs a service to run, a schema to keep in sync, and a second thing that can
-be down.
+**SQLite and a full scan — and this is the decision most likely to need
+revisiting.** Roost is a client on one person's machine: there are no accounts
+and there is not going to be a multi-tenant install, so scale here is never
+"more users". It is one user, for years, and the goal is to remember
+*everything* about them — which is a growth curve, not a ceiling.
+
+At the few thousand memories this was written for, an approximate index buys
+nothing measurable and costs a service to run, a schema to keep in sync, and a
+second thing that can be down. That is still true at that size. It stops being
+true earlier than the original comment implied, and the intended product walks
+straight through it.
 
 The conclusion is right and the arithmetic that used to be here was not, so it
 is worth replacing rather than deleting. It said a quantised vector was 768
@@ -25,17 +30,29 @@ matmul over a contiguous block, while `search` below reconstructs each vector
 in a Python loop — about twenty-five times the cost at ten thousand.
 
 **So the threshold is far lower than "a million".** It is comfortable to a few
-thousand, noticeable at ten thousand, and a real pause at fifty — which a
-long-lived daily install reaches in a couple of years, not never.
+thousand, noticeable at ten thousand, and a real pause at fifty. An agent that
+remembers what it read, what it ran, what was said and what it saw reaches
+fifty thousand in months rather than years, so this is a live constraint on the
+product rather than a distant one.
 
-**And when it arrives, the fix is not a vector database.** Vectorising in numpy
-does not help: scoring from a resident float32 matrix is fast but costs 512 MB
-at fifty thousand rows, which defeats the int8 quantisation below. The fix that
-is already proven in this family is Tern's — a keyed projection down to a fixed
-narrow width before storage, which composes with the rotation below because
-both are orthogonal. At 256 dimensions fifty thousand vectors are 13 MB rather
-than 128, and the scan gets an order of magnitude cheaper without adding a
-dependency, a service, or a second thing that can be down.
+**Two fixes, and they compose — the width first, then the scan.**
+
+*Width.* Vectors are stored at the model's full 2560 dimensions. Tern solves
+the same problem with a keyed projection down to a fixed narrow width before
+storage, which composes with the rotation below because both are orthogonal.
+At 256 dimensions fifty thousand vectors are 13 MB rather than 128, and a
+million are 256 MB rather than 2.5 GB. This is the half that decides whether
+the store fits in memory at all.
+
+*Scan.* Narrower rows do not fix the Python loop, only shrink it. Vectorising
+in numpy is not the answer either — scoring from a resident float32 matrix is
+fast but costs 512 MB at fifty thousand rows, which defeats the int8
+quantisation below. What is left is a scan in C over int8, which is what
+`sqlite-vec` is, in process, with no service and nothing extra to be down.
+
+Neither is built. The order matters if only one gets done: the projection is
+the cheaper change and the one that keeps a large store *loadable*, so it comes
+first.
 
 **Vectors are quantised to int8.** A quarter of the size for a similarity
 error far below the noise floor of the embedding itself. Each vector carries

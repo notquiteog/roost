@@ -378,6 +378,16 @@ you install it on a machine you control, the way you install `claude-code` or
 `codex`, and the person at the keyboard is the person it works for. Everything
 belongs to one user id because there is one user.
 
+That is not a smaller ambition, it is a different axis. Scale here is never
+"more users"; it is **one person, for years**, with a memory that is meant to
+hold basically everything about them. The store therefore grows without a
+natural ceiling, and the brute-force scan in `roost/memory/store.py` has a
+measured limit that the intended product walks through rather than approaches:
+comfortable at a few thousand memories, 53 ms at ten thousand, 283 ms at fifty.
+Two fixes are identified and neither is built — a keyed projection to a narrow
+fixed width, which is what keeps a large store loadable, and then a scan in C.
+The file carries the numbers and the order.
+
 That is a decision rather than a gap, and it is worth stating because the code
 looks like it is waiting for accounts and is not: the memory store is keyed by
 user and its vectors are scrambled with a per-user key. Both stay. The keying
