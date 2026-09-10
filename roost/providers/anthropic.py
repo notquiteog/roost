@@ -12,6 +12,7 @@ is used or reproduced here.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -61,6 +62,23 @@ def _to_anthropic_content(block: Any) -> dict[str, Any] | None:
     return None
 
 
+
+#: Effort levels this API accepts. `high` is the default when none is sent.
+_EFFORTS = frozenset({'low', 'medium', 'high', 'xhigh', 'max'})
+
+#: Keys of `ChatRequest.extra` this adapter converts itself, and so must not
+#: also splat into the payload verbatim.
+_TRANSLATED_EXTRAS = frozenset({'think', 'effort'})
+
+#: Models that still accept temperature/top_p/top_k. The current generation
+#: does not: those parameters were removed and are a 400, not an ignore.
+_SAMPLING_MODELS = re.compile(r'^claude-(3|opus-4-[0-6]|sonnet-4|haiku-4)', re.I)
+
+
+def _takes_sampling(model: str) -> bool:
+    return bool(_SAMPLING_MODELS.match(model or ''))
+
+
 class AnthropicProvider(ChatProvider):
     def __init__(
         self,
@@ -104,7 +122,47 @@ class AnthropicProvider(ChatProvider):
         }
         if req.system:
             payload['system'] = req.system
-        if req.temperature is not None:
+
+        # -- reasoning ------------------------------------------------------
+        #
+        # Three things about this API changed under the older shape most code
+        # was written to, and every one of them fails quietly or hard:
+        #
+        # * `{'type': 'enabled', 'budget_tokens': N}` is a 400 on the current
+        #   models. Depth is `output_config.effort` now, not a token budget.
+        # * `display` defaults to `omitted`, a silent change from Opus 4.6.
+        #   Without asking for `summarized`, thinking blocks still arrive and
+        #   still bill -- with empty text. Roost renders working-out, so the
+        #   panel would sit blank through a long turn and nothing would say why.
+        # * `{'type': 'disabled'}` is the wrong way to turn reasoning off here,
+        #   and dangerous in an agent specifically: with thinking disabled the
+        #   model sometimes writes a tool call into its VISIBLE TEXT instead of
+        #   a tool_use block. The turn succeeds, the call never runs, no error
+        #   is raised, and the text pollutes every later turn. It can also leak
+        #   `<thinking>` tags into the answer.
+        #
+        # So reasoning is always on, and `think: False` -- which the voice path
+        # sets, because reasoning is silence in a call -- becomes low effort
+        # with the working-out hidden rather than a disabled flag. That gets
+        # the latency the caller was asking for without the failure mode.
+        want_think = req.extra.get('think', True)
+        payload['thinking'] = {
+            'type': 'adaptive',
+            'display': 'summarized' if want_think is not False else 'omitted',
+        }
+        effort = req.extra.get('effort')
+        if want_think is False:
+            effort = 'low'
+        elif isinstance(want_think, str):
+            # Ollama's `think` carries a level on the models that expose one.
+            effort = want_think
+        if effort in _EFFORTS:
+            payload['output_config'] = {'effort': effort}
+
+        # Sampling was REMOVED on the current models -- temperature, top_p and
+        # top_k are each a 400 rather than being ignored, which turns one
+        # setting into a failed request. Sent only where it is understood.
+        if req.temperature is not None and _takes_sampling(req.model):
             payload['temperature'] = req.temperature
         if req.stop:
             payload['stop_sequences'] = req.stop
@@ -112,7 +170,11 @@ class AnthropicProvider(ChatProvider):
             payload['tools'] = [
                 {'name': t.name, 'description': t.description, 'input_schema': t.input_schema} for t in req.tools
             ]
-        payload.update(req.extra)
+        # The escape hatch, minus the keys this adapter has already translated.
+        # `think` is Ollama's spelling and has no meaning here: passed through
+        # it becomes an unknown top-level parameter, which this API answers
+        # with a 400 -- so the voice path talking to Anthropic failed outright.
+        payload.update({k: v for k, v in req.extra.items() if k not in _TRANSLATED_EXTRAS})
 
         # Blocks arrive indexed, and a tool_use block's input is streamed as
         # partial JSON across many deltas, so state is kept per index until
