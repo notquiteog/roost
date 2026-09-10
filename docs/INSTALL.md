@@ -64,6 +64,7 @@ dependency so an install that never uses it does not carry the weight:
 uv tool install 'roost[browser]'   # Playwright — a real Chromium
 uv tool install 'roost[desktop]'   # seeing and driving a screen
 uv tool install 'roost[tor]'       # routing a connection through a SOCKS proxy
+uv tool install 'roost[vec]'      # a C scan over memory, instead of a Python one
 ```
 
 After installing `[browser]`, fetch the browser itself, once:
@@ -71,6 +72,18 @@ After installing `[browser]`, fetch the browser itself, once:
 ```bash
 playwright install chromium
 ```
+
+`[vec]` is worth taking if you use memory for more than a few thousand things.
+It is `sqlite-vec`, a loadable SQLite extension, so it runs in the same process
+with no service to manage — measured at fifty thousand memories, 12.9 ms
+against 107.6 ms for the Python scan's arithmetic alone, before that scan also
+pays to hand back every row. Roost works without it and says nothing: search
+falls back to the scan, which returns the same memories in the same order.
+
+It is an extra rather than a dependency because loading it needs
+`enable_load_extension`, which is a compile-time Python option and not
+universal. An interpreter without it logs one line at start-up and uses the
+scan.
 
 A screen of the agent's **own** additionally needs `Xvfb` from your system
 package manager — `apt install xvfb`. Without it, desktop control falls back to

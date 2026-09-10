@@ -95,7 +95,8 @@ class MemoryService:
     # -- writing ------------------------------------------------------------
 
     async def remember(
-        self, user_id: str, text: str, *, kind: str = 'fact', source: str | None = None
+        self, user_id: str, text: str, *, kind: str = 'fact',
+        subject: str | None = None, source: str | None = None,
     ) -> Memory | None:
         """Store one thing. Returns None if this person has not opted in."""
         text = text.strip()
@@ -110,7 +111,7 @@ class MemoryService:
             log.warning('could not embed a memory: %s', exc)
             return None
 
-        return self.store.add(user_id, text, vectors[0], kind=kind, source=source)
+        return self.store.add(user_id, text, vectors[0], kind=kind, subject=subject, source=source)
 
     async def capture(self, user_id: str, text: str, *, source: str | None = None) -> list[Memory]:
         """Automatic capture from a conversation, if that too is switched on.
@@ -135,7 +136,18 @@ class MemoryService:
 
     # -- reading ------------------------------------------------------------
 
-    async def recall(self, user_id: str, query: str, *, limit: int = 5) -> Recall:
+    async def recall(
+        self, user_id: str, query: str, *, limit: int = 5,
+        kind: str | None = None, subject: str | None = None,
+    ) -> Recall:
+        """Nearest memories, optionally narrowed to a kind or a subject.
+
+        `subject` is what the memory is about — a project, a task — and
+        narrowing on it happens BEFORE the search rather than after: a subject
+        with a handful of memories would otherwise be pushed out of the top-k
+        by one with hundreds, which is precisely backwards for a question that
+        named it.
+        """
         if not self.store.settings(user_id).enabled:
             return Recall(memories=[], reason='memory is off for this user')
         if not query.strip():
@@ -150,7 +162,9 @@ class MemoryService:
             log.warning('recall failed, continuing without memory: %s', exc)
             return Recall(memories=[], reason=f'recall unavailable: {exc}')
 
-        found = self.store.search(user_id, vectors[0], limit=limit, min_score=MIN_SCORE)
+        found = self.store.search(
+            user_id, vectors[0], limit=limit, min_score=MIN_SCORE, kind=kind, subject=subject,
+        )
         return Recall(memories=found)
 
     async def context_for(self, user_id: str, query: str, *, budget: int = DEFAULT_BUDGET_CHARS) -> str:

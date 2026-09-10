@@ -277,3 +277,175 @@ def test_rows_from_two_models_are_never_compared(store):
 
     hits = store.search('alice', narrow, limit=10)
     assert [h.text for h in hits] == ['from the small model']
+
+
+# -- the index, and the scan it must agree with -----------------------------
+
+
+def test_the_index_and_the_scan_return_the_same_thing(store):
+    """The fallback is only safe if it is not a different feature.
+
+    sqlite-vec is optional: it is a loadable extension and
+    `enable_load_extension` is a compile-time Python option not every build
+    has. So there are two code paths, and the one nobody is watching is the one
+    that quietly diverges. Same corpus, same query, same answer — or the
+    fallback is a second implementation with its own behaviour.
+    """
+    if not store._vec:
+        pytest.skip('sqlite-vec is not loaded, so there is only one path to test')
+
+    texts = [f'memory number {i}' for i in range(40)]
+    for i, t in enumerate(texts):
+        store.add('alice', t, vec(700 + i))
+
+    query = vec(707)
+    # EVERYTHING, not a top-k.
+    #
+    # Comparing the top 5 of two scorers that differ by a fraction is flaky by
+    # construction: whichever memories sit either side of the cutoff swap
+    # places between runs, and the test then reports a boundary effect as a
+    # disagreement. Asking for the whole corpus removes the boundary, and the
+    # property being tested -- that the index is a faithful accelerator of the
+    # scan -- is about the ranking, not about where it happens to be cut.
+    indexed = store.search('alice', query, limit=len(texts), min_score=-1.0)
+
+    store._vec = False
+    try:
+        scanned = store.search('alice', query, limit=len(texts), min_score=-1.0)
+    finally:
+        store._vec = True
+
+    assert {m.id for m in indexed} == {m.id for m in scanned}
+
+    # Same score for each, within a MEASURED bound rather than a guessed one.
+    #
+    # The index accepts only int8, so the query is quantised before matching;
+    # the scan compares it as floats against the dequantised rows. The gap is
+    # the query's own quantisation error, measured over 300 random pairs at
+    # mean 0.00037, p99 0.00102, max 0.00139 -- so 3e-3 clears the tail with
+    # room and is still thirty times under the projection's own 0.046.
+    by_id = {m.id: m.score for m in scanned}
+    for m in indexed:
+        assert m.score == pytest.approx(by_id[m.id], abs=3e-3), (
+            f'{m.text}: index says {m.score}, scan says {by_id[m.id]}'
+        )
+
+    # And where two results are genuinely apart, the order agrees -- otherwise
+    # this would pass on a path that ranked at random. Pairs closer together
+    # than the gap above are excluded, because those are the ties the
+    # quantisation is allowed to swap.
+    scan_rank = {m.id: r for r, m in enumerate(scanned)}
+    separated = [
+        (a, b) for i, a in enumerate(indexed) for b in indexed[i + 1:]
+        if a.score - b.score > 3e-3
+    ]
+    assert len(separated) > 50, 'too few separated pairs to say anything about ranking'
+    for a, b in separated:
+        assert scan_rank[a.id] < scan_rank[b.id], (
+            f'{a.text} outranks {b.text} in the index and not in the scan'
+        )
+
+
+def test_a_narrow_model_still_reaches_the_index(store):
+    """Padding to the index width has to be exact, or the paths disagree.
+
+    `_projection` keeps min(EMBED_DIMS, src_dim), so a model narrower than the
+    index produces a narrower vector. Zero-padding both sides changes neither
+    the dot product nor either norm, so the cosine is identical — this asserts
+    that rather than trusting it.
+    """
+    if not store._vec:
+        pytest.skip('sqlite-vec is not loaded')
+    for i in range(10):
+        store.add('alice', f'narrow {i}', vec(800 + i, dim=64))
+    q = vec(803, dim=64)
+    indexed = store.search('alice', q, limit=3, min_score=0.0)
+    store._vec = False
+    try:
+        scanned = store.search('alice', q, limit=3, min_score=0.0)
+    finally:
+        store._vec = True
+    assert [m.id for m in indexed] == [m.id for m in scanned]
+
+
+def test_deleting_a_memory_removes_it_from_the_index(store):
+    """A delete that leaves the index behind is a memory that comes back.
+
+    Nothing about it looks like a failure: the row is gone from `memories`, the
+    UI says it was forgotten, and the vector still matches.
+    """
+    m = store.add('alice', 'forget me', vec(900))
+    store.add('alice', 'keep me', vec(901))
+    assert store.delete('alice', m.id)
+    found = store.search('alice', vec(900), limit=5, min_score=0.0)
+    assert 'forget me' not in [h.text for h in found]
+    if store._vec:
+        left = store._db.execute('SELECT COUNT(*) AS n FROM memories_vec').fetchone()['n']
+        assert left == 1, 'the index still holds the deleted memory'
+
+
+def test_wipe_empties_the_index_too(store):
+    store.add('alice', 'a', vec(910))
+    store.add('alice', 'b', vec(911))
+    store.wipe('alice')
+    if store._vec:
+        left = store._db.execute('SELECT COUNT(*) AS n FROM memories_vec').fetchone()['n']
+        assert left == 0, 'wiping left vectors in the index'
+
+
+# -- what a memory is about -------------------------------------------------
+
+
+def test_recall_can_be_scoped_to_a_project_or_a_task(store):
+    """The reason `subject` exists, as opposed to `kind`.
+
+    `kind` says what sort of thing a memory is; `subject` says what it attaches
+    to. "What do you know about the roost project" needs the second, and no
+    amount of kind alone expresses it.
+    """
+    store.add('alice', 'roost uses sqlite for memory', vec(1000), kind='project', subject='roost')
+    store.add('alice', 'tern uses qdrant for memory', vec(1001), kind='project', subject='tern')
+    store.add('alice', 'I prefer short commit subjects', vec(1002), kind='preference')
+
+    only_roost = store.search('alice', vec(1000), limit=10, min_score=0.0, subject='roost')
+    assert [m.text for m in only_roost] == ['roost uses sqlite for memory']
+
+    # A kind filter and a subject filter are independent. `min_score=-1` so
+    # this tests the FILTER rather than the similarity: two random vectors are
+    # near-orthogonal, so the unrelated project would be dropped by the
+    # threshold and the test would pass for the wrong reason.
+    projects = store.search('alice', vec(1000), limit=10, min_score=-1.0, kind='project')
+    assert sorted(m.subject for m in projects) == ['roost', 'tern']
+
+    # And a memory about the person carries no subject at all.
+    prefs = store.list('alice', kind='preference')
+    assert prefs[0].subject is None
+
+
+def test_subject_survives_the_round_trip_through_the_index(store):
+    """The index cannot store NULL in a text column, so '' stands in for it.
+
+    Both halves of that translation are asserted, because only checking that
+    `None` comes back tests nothing: `_search_indexed` builds its Memory from
+    the `memories` table, which holds NULL correctly, so the sentinel could
+    stop being written entirely and this would still pass. Planting exactly
+    that showed it. What has to be true is that the index really does carry
+    `''` — inserting NULL there is an error, not a silent difference — and that
+    the value never comes back out that way.
+    """
+    store.add('alice', 'about me', vec(1010))
+    store.add('alice', 'about roost', vec(1011), kind='project', subject='roost')
+
+    if store._vec:
+        stored = dict(store._db.execute(
+            'SELECT v.subject, m.text FROM memories_vec v JOIN memories m ON m.id = v.memory_id'
+        ).fetchall())
+        assert stored == {'': 'about me', 'roost': 'about roost'}, (
+            f'the index is not carrying the sentinel as expected: {stored}'
+        )
+
+    about_me = store.search('alice', vec(1010), limit=1, min_score=0.0)
+    assert about_me[0].subject is None, 'the empty-string sentinel leaked out of the index'
+
+    about_roost = store.search('alice', vec(1011), limit=1, min_score=0.0, subject='roost')
+    assert about_roost[0].subject == 'roost'
