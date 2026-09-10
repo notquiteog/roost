@@ -79,6 +79,60 @@ def _takes_sampling(model: str) -> bool:
     return bool(_SAMPLING_MODELS.match(model or ''))
 
 
+def reasoning_params(req: ChatRequest) -> dict[str, Any]:
+    """The reasoning and sampling half of the request body.
+
+    Its own function so it can be checked without an endpoint. Every rule here
+    is one that fails silently or hard, and none of them is visible in a
+    response body — which is the argument for testing it directly rather than
+    trusting a live call to have exercised it.
+
+    Three things about this API moved under the older shape most code was
+    written to:
+
+    * ``{'type': 'enabled', 'budget_tokens': N}`` is a 400 on the current
+      models. Depth is ``output_config.effort`` now, not a token budget.
+    * ``display`` defaults to ``omitted``, a silent change from Opus 4.6.
+      Without asking for ``summarized``, thinking blocks still arrive and still
+      bill — with empty text. Roost renders working-out, so the panel would sit
+      blank through a long turn and nothing would say why.
+    * ``{'type': 'disabled'}`` is the wrong way to turn reasoning off, and
+      dangerous in an agent specifically: with thinking disabled the model
+      sometimes writes a tool call into its VISIBLE TEXT instead of a tool_use
+      block. The turn succeeds, the call never runs, no error is raised, and
+      that text pollutes every later turn. It can also leak ``<thinking>`` tags
+      into the answer.
+
+    So reasoning is always on, and ``think: False`` — which the voice path
+    sets, because reasoning is silence in a call — becomes low effort with the
+    working-out hidden rather than a disabled flag. That gets the latency the
+    caller asked for without the failure mode.
+    """
+    out: dict[str, Any] = {}
+    want_think = req.extra.get('think', True)
+    out['thinking'] = {
+        'type': 'adaptive',
+        'display': 'summarized' if want_think is not False else 'omitted',
+    }
+    effort = req.extra.get('effort')
+    if want_think is False:
+        effort = 'low'
+    elif isinstance(want_think, str):
+        # Ollama's `think` carries a level on the models that expose one.
+        effort = want_think
+    # An unrecognised level is dropped rather than forwarded: an unknown effort
+    # is itself a 400, and this API already defaults to `high`.
+    if effort in _EFFORTS:
+        out['output_config'] = {'effort': effort}
+
+    # Sampling was REMOVED on the current models — temperature, top_p and top_k
+    # are each a 400 rather than being ignored, which turns one setting into a
+    # failed request. Sent only where it is understood.
+    if req.temperature is not None and _takes_sampling(req.model):
+        out['temperature'] = req.temperature
+    return out
+
+
 class AnthropicProvider(ChatProvider):
     def __init__(
         self,
@@ -123,47 +177,7 @@ class AnthropicProvider(ChatProvider):
         if req.system:
             payload['system'] = req.system
 
-        # -- reasoning ------------------------------------------------------
-        #
-        # Three things about this API changed under the older shape most code
-        # was written to, and every one of them fails quietly or hard:
-        #
-        # * `{'type': 'enabled', 'budget_tokens': N}` is a 400 on the current
-        #   models. Depth is `output_config.effort` now, not a token budget.
-        # * `display` defaults to `omitted`, a silent change from Opus 4.6.
-        #   Without asking for `summarized`, thinking blocks still arrive and
-        #   still bill -- with empty text. Roost renders working-out, so the
-        #   panel would sit blank through a long turn and nothing would say why.
-        # * `{'type': 'disabled'}` is the wrong way to turn reasoning off here,
-        #   and dangerous in an agent specifically: with thinking disabled the
-        #   model sometimes writes a tool call into its VISIBLE TEXT instead of
-        #   a tool_use block. The turn succeeds, the call never runs, no error
-        #   is raised, and the text pollutes every later turn. It can also leak
-        #   `<thinking>` tags into the answer.
-        #
-        # So reasoning is always on, and `think: False` -- which the voice path
-        # sets, because reasoning is silence in a call -- becomes low effort
-        # with the working-out hidden rather than a disabled flag. That gets
-        # the latency the caller was asking for without the failure mode.
-        want_think = req.extra.get('think', True)
-        payload['thinking'] = {
-            'type': 'adaptive',
-            'display': 'summarized' if want_think is not False else 'omitted',
-        }
-        effort = req.extra.get('effort')
-        if want_think is False:
-            effort = 'low'
-        elif isinstance(want_think, str):
-            # Ollama's `think` carries a level on the models that expose one.
-            effort = want_think
-        if effort in _EFFORTS:
-            payload['output_config'] = {'effort': effort}
-
-        # Sampling was REMOVED on the current models -- temperature, top_p and
-        # top_k are each a 400 rather than being ignored, which turns one
-        # setting into a failed request. Sent only where it is understood.
-        if req.temperature is not None and _takes_sampling(req.model):
-            payload['temperature'] = req.temperature
+        payload.update(reasoning_params(req))
         if req.stop:
             payload['stop_sequences'] = req.stop
         if req.tools:
