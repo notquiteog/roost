@@ -45,11 +45,16 @@ test suite asserts this to 1e-6, because the whole design rests on it.
 
 What it buys:
 
-* A stolen database is not a pile of embeddings someone can run through a
-  public model to recover the text.
-* Vectors belonging to two different users cannot be meaningfully compared.
+* **A stolen database is not a pile of embeddings** someone can run through a
+  public model to recover the text. This is the one that earns the design.
+  Roost is a client on a machine you control — there is one user, and the
+  database is a file on their disk — so at-rest recoverability is the whole
+  threat, and it is the half of this that is load-bearing.
+* Vectors belonging to two different user ids cannot be meaningfully compared.
   Cross-user leakage is not merely forbidden by a `WHERE` clause; it is
-  meaningless.
+  meaningless. True, and not currently doing any work: Roost has one user by
+  design and is not heading for accounts. Kept because the store is keyed that
+  way and removing the keying to simplify would cost the bullet above.
 
 Queries are projected the same way, so nothing is ever unprojected and the key
 never has to leave its table. A wipe deletes the key along with the rows, so a

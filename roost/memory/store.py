@@ -2,13 +2,40 @@
 
 Three decisions shape this file.
 
-**SQLite and a full scan, not a vector database.** A person's memories number
-in the thousands, not the millions. At that size an approximate index buys
-nothing measurable and costs a service to run, a schema to keep in sync, and a
-second thing that can be down. A quantised vector is 768 bytes; ten thousand of
-them is seven megabytes, and a dot product over seven megabytes is a couple of
-milliseconds. When someone has a million memories this will be the wrong
-choice, and it will be obvious, and the interface here will not have to change.
+**SQLite and a full scan, not a vector database.** Roost is a client on one
+person's machine — there are no accounts and there is not going to be a
+multi-tenant install — so the store holds one person's memories, which number
+in the thousands. At that size an approximate index buys nothing measurable and
+costs a service to run, a schema to keep in sync, and a second thing that can
+be down.
+
+The conclusion is right and the arithmetic that used to be here was not, so it
+is worth replacing rather than deleting. It said a quantised vector was 768
+bytes and that a dot product over ten thousand of them was "a couple of
+milliseconds". Measured, at the 2560 dimensions of the floor embedder
+(`qwen3-embedding:4b`):
+
+    1,000 memories     4.9 ms
+   10,000 memories    52.9 ms
+   50,000 memories   283.1 ms
+
+Two things were wrong. 768 bytes assumed a 768-dimension model; the floor is
+2560, so a vector is 2560 bytes. And "a couple of milliseconds" describes one
+matmul over a contiguous block, while `search` below reconstructs each vector
+in a Python loop — about twenty-five times the cost at ten thousand.
+
+**So the threshold is far lower than "a million".** It is comfortable to a few
+thousand, noticeable at ten thousand, and a real pause at fifty — which a
+long-lived daily install reaches in a couple of years, not never.
+
+**And when it arrives, the fix is not a vector database.** Vectorising in numpy
+does not help: scoring from a resident float32 matrix is fast but costs 512 MB
+at fifty thousand rows, which defeats the int8 quantisation below. The fix that
+is already proven in this family is Tern's — a keyed projection down to a fixed
+narrow width before storage, which composes with the rotation below because
+both are orthogonal. At 256 dimensions fifty thousand vectors are 13 MB rather
+than 128, and the scan gets an order of magnitude cheaper without adding a
+dependency, a service, or a second thing that can be down.
 
 **Vectors are quantised to int8.** A quarter of the size for a similarity
 error far below the noise floor of the embedding itself. Each vector carries

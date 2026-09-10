@@ -373,9 +373,18 @@ the same position, and it is the one with the least margin for error, since
 its event names moved between the beta and GA and only one of the two
 spellings can be checked without a key.
 
-There are no accounts yet: everything belongs to one user id, though the store
-has always been per-user, so adding them is a migration rather than a
-redesign.
+**There are no accounts, and there are not going to be.** Roost is a client —
+you install it on a machine you control, the way you install `claude-code` or
+`codex`, and the person at the keyboard is the person it works for. Everything
+belongs to one user id because there is one user.
+
+That is a decision rather than a gap, and it is worth stating because the code
+looks like it is waiting for accounts and is not: the memory store is keyed by
+user and its vectors are scrambled with a per-user key. Both stay. The keying
+earns its place with one user — a stolen database is still not a pile of
+embeddings anyone can run through a public model to recover the text, which is
+the property that matters when the database is a file on somebody's laptop.
+The cross-user half of the argument is simply not load-bearing here.
 
 **Small models are the real constraint on the autonomous modes.** gemma4:12b
 does a five-step browser task reliably when the tool list is narrowed to what
