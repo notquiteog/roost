@@ -53,6 +53,11 @@ function fillHost() {
   if (!chosen) return;
   $('#conn-url').value = chosen.base_url;
   $('#conn-local').checked = chosen.local;
+  // Where the key comes from, for the one host whose key is not from a
+  // billing page. Everything else keeps the generic hint.
+  $('#conn-key').placeholder = chosen.id === 'perch'
+    ? "perch_… — from Perch's console, Connect page"
+    : 'leave blank if it needs none';
 
   const bits = [];
   if (chosen.note) bits.push(chosen.note);
@@ -137,10 +142,14 @@ async function loadList(providers) {
     if (p.tor) li.appendChild(el('span', 'tag tor', 'tor'));
     if (!p.editable) li.appendChild(el('span', 'tag', 'from .env'));
 
+    // The connection behind this row. Usually the row's own id; for Perch it
+    // is one connection behind up to five rows, none of which share its id.
+    const cid = p.connection_id || p.id;
+
     const test = el('button', 'ghost small', 'Test');
     test.onclick = async () => {
       test.textContent = 'testing…';
-      const result = await json(`/api/providers/connections/${p.id}/test`, { method: 'POST' });
+      const result = await json(`/api/providers/connections/${cid}/test`, { method: 'POST' });
       // A count and a few real names, rather than a tick: it proves the
       // address, the key and the route in one, which a tick does not.
       test.textContent = result
@@ -154,8 +163,13 @@ async function loadList(providers) {
     if (p.editable) {
       const remove = el('button', 'ghost small', 'Remove');
       remove.onclick = async () => {
-        if (!confirm(`Disconnect ${p.label || p.id}?`)) return;
-        await api(`/api/providers/connections/${p.id}`, { method: 'DELETE' });
+        // Said, because it is not what the row suggests: every Perch row is the
+        // same connection, and removing one removes all of them.
+        const what = cid !== p.id
+          ? `Disconnect ${cid}? Every one of its services goes with it.`
+          : `Disconnect ${p.label || p.id}?`;
+        if (!confirm(what)) return;
+        await api(`/api/providers/connections/${cid}`, { method: 'DELETE' });
         refresh();
       };
       li.appendChild(remove);
@@ -207,8 +221,16 @@ async function add(event) {
     return;
   }
 
+  // Which services came up, for a host that is several. "connected" alone
+  // would hide that Perch has video switched off, which is exactly the thing
+  // somebody about to route video at it needs to know.
+  const body = await res.json().catch(() => ({}));
+  const off = Object.entries(body.services || {}).filter(([, up]) => !up).map(([s]) => s);
   $('#conn-key').value = '';
-  $('#conn-status').textContent = 'connected';
+  $('#conn-status').textContent = body.registered && body.registered.length
+    ? `connected — ${body.registered.map((id) => id.split(':').pop()).join(', ')}`
+      + (off.length ? `; ${off.join(', ')} switched off` : '')
+    : 'connected';
   refresh();
 }
 

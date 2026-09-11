@@ -24,7 +24,7 @@ from typing import Any
 
 from openmirror.media.params import Param, common_image
 from openmirror.net.transport import Transport
-from openmirror.providers.base import GeneratedMedia, ImageProvider
+from openmirror.providers.base import GeneratedMedia, ImageProvider, ProviderRefused, refused
 
 log = logging.getLogger(__name__)
 
@@ -190,19 +190,33 @@ class A1111Provider(ImageProvider):
     # -- what it can do -----------------------------------------------------
 
     async def models(self) -> list[dict[str, Any]]:
-        body = await self._get('/sdapi/v1/sd-models')
+        # `refuse`: a listing is how the Test button proves the key, so a 401
+        # here has to be a failure rather than the empty list `_get` gives
+        # everything else that goes wrong.
+        body = await self._get('/sdapi/v1/sd-models', refuse=True)
         return [
             {'id': m.get('title') or m.get('model_name'), 'provider': self.provider_id}
             for m in (body or [])
         ]
 
-    async def _get(self, path: str) -> Any:
+    async def _get(self, path: str, *, refuse: bool = False) -> Any:
+        """GET something optional, where missing is an answer.
+
+        `refuse` makes a refused key an error instead of None. Only the model
+        listing asks for that: the sampler and option lookups that share this
+        are genuinely optional, and a build with no `/samplers` endpoint must
+        still generate.
+        """
         try:
             async with self.transport.session(30) as session:
                 async with session.get(f'{self.base_url}{path}', headers=self._headers()) as resp:
+                    if refuse and resp.status in (401, 403):
+                        raise refused(self.provider_id, self.base_url, resp.status)
                     if resp.status != 200:
                         return None
                     return await resp.json()
+        except ProviderRefused:
+            raise
         except Exception as exc:  # noqa: BLE001 - a missing endpoint is an answer
             log.debug('%s: %s did not answer: %s', self.provider_id, path, exc)
             return None

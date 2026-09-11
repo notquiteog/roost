@@ -23,17 +23,18 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from openmirror.providers.base import Modality, ProviderInfo
+# The errors live in `base` so the adapters can raise them without importing
+# the registry; they are re-exported here because this is where every caller
+# has always imported them from.
+from openmirror.providers.base import (  # noqa: F401 - NoProviderError and friends are re-exported
+    Modality,
+    NoProviderError,
+    PrivacyRefusal,
+    ProviderInfo,
+    ProviderRefused,
+)
 
 log = logging.getLogger(__name__)
-
-
-class NoProviderError(RuntimeError):
-    """No provider can serve this modality under the current constraints."""
-
-
-class PrivacyRefusal(NoProviderError):
-    """A provider exists but sending to it would break the caller's own rule."""
 
 
 @dataclass(slots=True)
@@ -89,12 +90,21 @@ class ProviderRegistry:
     def unregister(self, provider_id: str) -> None:
         self._entries.pop(provider_id, None)
 
-    def register_perch(self, cfg: Any, available: dict[str, bool]) -> list[str]:
+    def register_perch(self, cfg: Any, available: dict[str, bool], connection: Any = None) -> list[str]:
         """Register one Perch host as its live services.
 
         Each service becomes its own provider id rather than one 'perch'
         entry, so someone can route chat at Perch and images at a hosted
         service without the two decisions being tangled.
+
+        `connection` is the stored connection this came from, when it came from
+        one. Every service carries it, which is what makes all of them editable
+        in the UI and lets any one of their rows remove the lot.
+
+        A service that is now down is unregistered, not left as it was. Turning
+        video off in Perch and reconnecting would otherwise keep offering video
+        from the previous probe, which is the dead-port offer `probe` exists to
+        avoid.
         """
         from openmirror.providers import perch as perch_mod
 
@@ -105,8 +115,11 @@ class ProviderRegistry:
             mine = {m: impl for m, impl in impls.items() if m in perch_mod.SERVICE_MODALITIES[service]}
             if not mine:
                 continue
-            self.register(info, mine)
+            self.register(info, mine, connection=connection)
             registered.append(info.id)
+        for service, up in available.items():
+            if not up:
+                self.unregister(f'perch:{service}')
         return registered
 
     # -- inspection ---------------------------------------------------------
@@ -153,6 +166,10 @@ class ProviderRegistry:
             'base_url': entry.info.base_url,
             'modalities': sorted(m.value for m in entry.impls),
             'editable': conn is not None,
+            # Which stored connection to test or remove for this row. Usually
+            # the provider's own id; for Perch it is the one connection behind
+            # up to five providers, none of which share its id.
+            'connection_id': getattr(conn, 'id', '') or '',
             'tor': bool(getattr(conn, 'tor', False)),
             'host_id': getattr(conn, 'host_id', ''),
             'has_key': bool(getattr(conn, 'api_key', '')),

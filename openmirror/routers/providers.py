@@ -214,6 +214,9 @@ async def put_connection(body: ConnectionBody) -> dict[str, Any]:
         if existing:
             conn.api_key = existing.api_key
 
+    if conn.adapter == 'perch':
+        return await _save_perch(conn)
+
     if conn.tor:
         ok, why = await tor_mod.probe(tor_mod.resolve(conn.tor_host, conn.tor_port))
         if not ok:
@@ -238,9 +241,16 @@ async def put_connection(body: ConnectionBody) -> dict[str, Any]:
 
 @router.delete('/connections/{connection_id}')
 async def delete_connection(connection_id: str) -> dict[str, Any]:
+    conn = store.get(connection_id)
     if not store.remove(connection_id):
         raise HTTPException(status_code=404, detail=f'no such connection: {connection_id}')
-    registry.unregister(connection_id)
+    for provider_id in connections.provider_ids(conn) if conn else [connection_id]:
+        registry.unregister(provider_id)
+    if conn is not None and conn.adapter == 'perch':
+        # A saved Perch replaced the one the environment configured, since both
+        # register the same ids. Removing the saved one puts the environment's
+        # back, rather than leaving an install with PERCH_HOST set and no Perch.
+        await _register_env_perch()
     return {'ok': True, 'providers': _providers()}
 
 
@@ -254,12 +264,23 @@ async def test_connection(connection_id: str) -> dict[str, Any]:
     """
     conn = store.get(connection_id)
     if conn is None:
-        raise HTTPException(status_code=404, detail=f'no such connection: {connection_id}')
+        # A provider the environment configured has no stored connection, but
+        # it can still be asked for its models — which is all a test is. Before
+        # this, the Test button on every `from .env` row answered "no answer".
+        return await _test_registered(connection_id)
 
     started = asyncio.get_running_loop().time()
     try:
+        if conn.adapter == 'perch':
+            from openmirror.providers import perch as perch_mod
+
+            cfg = perch_mod.from_connection(conn)
+            ok, why = await perch_mod.check_token(cfg)
+            if not ok:
+                return {'ok': False, 'error': why, 'tor': False}
         info, impls = connections.build(conn)
         impl = next(iter(impls.values()))
+        await _check(impl)
         models = await impl.models()
     except Exception as exc:  # noqa: BLE001
         return {'ok': False, 'error': str(exc)[:500], 'tor': conn.tor}
@@ -387,21 +408,119 @@ async def connect_perch(body: PerchConnect) -> dict[str, Any]:
     registering all five blind would offer a video generator that is not
     there. What comes back says which are live, which is also the honest
     answer to "did that work".
+
+    Saved, through the same path the settings dialog uses. It used to register
+    into the running process and nothing else, so a Perch connected here was
+    gone at the next restart — and a connection that quietly disappears reads
+    as a connection that never worked.
+    """
+    conn = connections.from_host(
+        'perch',
+        api_key=body.token,
+        base_url=f'{body.scheme}://{body.host}',
+    )
+    result = await _save_perch(conn)
+    result['capabilities'] = registry.capabilities(local_only=config.local_only)
+    return result
+
+
+async def _save_perch(conn: Connection) -> dict[str, Any]:
+    """Probe a Perch host, check its token, then save and register it.
+
+    In that order, and all three before anything is written. A Perch connection
+    saved with a token Perch does not know would be reported as connected and
+    then fail every request with a 401 somewhere far from this dialog; one
+    saved against a host where nothing answers would offer five services that
+    are not there.
     """
     from openmirror.providers import perch as perch_mod
 
-    cfg = perch_mod.PerchConfig(host=body.host, token=body.token, scheme=body.scheme)
-    available = await perch_mod.probe(cfg)
-
-    if not any(available.values()):
+    if conn.tor:
         raise HTTPException(
-            status_code=502,
-            detail=f'nothing answered at {body.host} on ports {", ".join(str(p) for p in perch_mod.DEFAULT_PORTS.values())}',
+            status_code=400,
+            detail=(
+                'Perch connections cannot go over Tor from here yet — its services are '
+                'reached directly, normally over the SSH tunnel Perch sets up to loopback. '
+                'Leave Tor off for this one.'
+            ),
         )
 
-    registered = registry.register_perch(cfg, available)
+    cfg = perch_mod.from_connection(conn)
+    available = await perch_mod.probe(cfg)
+    if not any(available.values()):
+        ports = ', '.join(str(p) for p in perch_mod.DEFAULT_PORTS.values())
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f'nothing answered at {cfg.host} on ports {ports}. If Perch runs on '
+                'another machine, the address is wherever its tunnel lands — its '
+                'Connect page shows it.'
+            ),
+        )
+
+    ok, why = await perch_mod.check_token(cfg)
+    if not ok:
+        raise HTTPException(status_code=400, detail=why)
+
+    store.put(conn)
+    registered: list[str] = []
+    if conn.enabled:
+        registered = registry.register_perch(cfg, available, connection=conn)
+    else:
+        for provider_id in perch_mod.PROVIDER_IDS:
+            registry.unregister(provider_id)
     return {
+        'connection': conn.redacted(),
+        'providers': _providers(),
         'registered': registered,
         'services': available,
-        'capabilities': registry.capabilities(local_only=config.local_only),
+    }
+
+
+async def _register_env_perch() -> None:
+    """Register the Perch the environment describes, if it describes one."""
+    if not config.perch_host:
+        return
+    from openmirror.providers import perch as perch_mod
+
+    cfg = perch_mod.PerchConfig(
+        host=config.perch_host, token=config.perch_token, scheme=config.perch_scheme
+    )
+    registry.register_perch(cfg, await perch_mod.probe(cfg))
+
+
+async def _check(impl: Any) -> None:
+    """Ask the provider to prove its address and key, where listing cannot.
+
+    Most adapters prove both by listing models, and now raise when the key is
+    refused. A few list something local instead — ComfyUI's templates — and
+    those carry a `check` that reaches the server, because a Test button that
+    never leaves this machine is a green tick for anything.
+    """
+    check = getattr(impl, 'check', None)
+    if check is not None:
+        await check()
+
+
+async def _test_registered(provider_id: str) -> dict[str, Any]:
+    """Test a provider that is registered but was never stored."""
+    try:
+        described = registry.describe(provider_id)
+    except NoProviderError as exc:
+        raise HTTPException(status_code=404, detail=f'no such connection: {provider_id}') from exc
+
+    started = asyncio.get_running_loop().time()
+    try:
+        impl = registry.impl(provider_id, Modality(described['modalities'][0]))
+        await _check(impl)
+        models = await impl.models()
+    except Exception as exc:  # noqa: BLE001
+        return {'ok': False, 'error': str(exc)[:500], 'tor': False}
+    return {
+        'ok': True,
+        'models': len(models),
+        'sample': [m.get('id') for m in models[:8]],
+        'took_ms': int((asyncio.get_running_loop().time() - started) * 1000),
+        'tor': False,
+        'modalities': described['modalities'],
     }

@@ -148,15 +148,17 @@ async def bootstrap(cfg: Config, registry: ProviderRegistry) -> list[str]:
         if not conn.enabled:
             continue
         try:
-            info, impls = connections.build(conn)
+            # `register` rather than `build`: a stored Perch is one connection
+            # and several providers, and only registering it knows that.
+            ids = await connections.register(conn, registry)
         except Exception as exc:  # noqa: BLE001
             # One bad connection must not stop the daemon. It is reported and
             # left unregistered, which is also what the UI shows.
             log.warning('connection %s could not be built: %s', conn.id, exc)
             continue
-        registry.register(info, impls, connection=conn)
-        if conn.id not in registered:
-            registered.append(conn.id)
+        for provider_id in ids:
+            if provider_id not in registered:
+                registered.append(provider_id)
 
     registry.set_defaults(_default_routes(cfg))
 

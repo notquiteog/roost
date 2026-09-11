@@ -30,6 +30,7 @@ from openmirror.providers.base import (
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    refused,
 )
 
 API_VERSION = '2023-06-01'
@@ -302,6 +303,10 @@ class AnthropicProvider(ChatProvider):
     async def models(self) -> list[dict[str, Any]]:
         async with self.transport.session(30) as session:
             async with session.get(f'{self.base_url}/models', headers=self._headers()) as resp:
+                if resp.status in (401, 403):
+                    # Refused, and said so. Returned as [] this read as "nothing
+                    # pulled yet" and the Test button reported it as a success.
+                    raise refused(self.provider_id, self.base_url, resp.status)
                 if resp.status != 200:
                     return []
                 body = await resp.json()

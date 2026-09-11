@@ -72,7 +72,16 @@ async def voice_socket(ws: WebSocket, token: str | None = Query(None)) -> None:
         # Same rule as the agent socket: not the first model, the first one
         # that can actually hold a conversation. Tools are not required here —
         # a voice call without an agent attached only has to talk.
-        models = await llm.models()
+        try:
+            models = await llm.models()
+        except NoProviderError as exc:
+            # A refused key, said to the caller rather than dropping the
+            # socket: this runs before the pipeline exists, so nothing else
+            # would report it, and a socket that just closes reads as the
+            # daemon being down.
+            await ws.send_json({'type': 'voice.error', 'message': str(exc), 'fatal': True})
+            await ws.close(code=4404)
+            return
         llm_model = pick_model(models, Modality.CHAT)
 
     cfg = VoiceConfig(

@@ -21,6 +21,37 @@ from enum import StrEnum
 from typing import Any, Literal
 
 
+class NoProviderError(RuntimeError):
+    """No provider can serve this modality under the current constraints."""
+
+
+class PrivacyRefusal(NoProviderError):
+    """A provider exists but sending to it would break the caller's own rule."""
+
+
+class ProviderRefused(NoProviderError):
+    """The provider answered, and said no to the key.
+
+    A `NoProviderError` on purpose: every place that already turns "nothing can
+    serve this" into a message a person reads — the agent route, the agent and
+    voice sockets — shows this one the same way, without learning a new type.
+
+    It exists because the alternative was an empty list. Adapters used to treat
+    a 401 from their model listing like any other non-200 and return `[]`,
+    which is indistinguishable from "nothing pulled yet": the Test button said
+    "ok — 0 models" for a connection that had been refused, and the agent said
+    the provider "reports no models". Both were true and neither was the
+    reason.
+    """
+
+
+def refused(provider_id: str, base_url: str, status: int, hint: str = '') -> ProviderRefused:
+    """The error an adapter raises when its key was refused. One wording, everywhere."""
+    what = 'missing, wrong or revoked' if status == 401 else 'not allowed to do this'
+    message = f'{provider_id}: {base_url} refused the key (HTTP {status}) — it is {what}.'
+    return ProviderRefused(f'{message} {hint}'.strip())
+
+
 class Modality(StrEnum):
     CHAT = 'chat'
     EMBEDDING = 'embedding'

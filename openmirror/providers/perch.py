@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -38,6 +39,12 @@ DEFAULT_PORTS = {
     'video': 8188,   # ComfyUI
     'audio': 8880,   # Kokoro
 }
+
+# Every provider id one Perch host can become. A stored Perch connection is
+# one row in the connection store and up to five in the registry, so removing
+# it means removing all of these — not the connection's own id, which no
+# provider carries.
+PROVIDER_IDS = tuple(f'perch:{service}' for service in DEFAULT_PORTS)
 
 # Which of our modalities each Perch service answers for.
 SERVICE_MODALITIES: dict[str, set[Modality]] = {
@@ -62,6 +69,57 @@ class PerchConfig:
 
     def url(self, service: str) -> str:
         return f'{self.scheme}://{self.host}:{self.ports.get(service, DEFAULT_PORTS[service])}'
+
+
+def from_connection(conn: Any) -> PerchConfig:
+    """A stored connection, read as the one host it names.
+
+    The address is a host, not the URL of one service. Perch's services sit on
+    their conventional ports, so a port typed into the address is ignored
+    rather than believed: `http://127.0.0.1:11434` taken literally would send
+    dictation to Ollama. A bare `127.0.0.1` is accepted too, because that is
+    what Perch's own Connect page shows.
+    """
+    raw = (conn.base_url or '').strip() or '127.0.0.1'
+    parsed = urlparse(raw if '://' in raw else f'http://{raw}')
+    return PerchConfig(
+        host=parsed.hostname or '127.0.0.1',
+        token=conn.api_key,
+        scheme=parsed.scheme or 'http',
+        local=conn.local,
+    )
+
+
+async def check_token(cfg: PerchConfig, timeout: float = 5.0) -> tuple[bool, str]:  # noqa: ASYNC109 - passed to aiohttp.ClientTimeout
+    """Whether Perch accepts this token, asked of the chat service.
+
+    `probe` deliberately says nothing about the token — `/healthz` is open on
+    every service — and for start-up that is right. For a person pasting a
+    token into a settings dialog it is not: a wrong token would be saved,
+    reported as connected, and then fail every request with a 401 somewhere
+    far from the dialog. Chat is asked because it is the one service Perch
+    never switches off.
+    """
+    try:
+        # transport-exempt: the same reasoning as `probe` below — a Perch
+        # connection has no Tor toggle to honour, and is normally reached over
+        # an SSH tunnel to loopback, where there is nothing for Tor to hide.
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
+            headers = {'Authorization': f'Bearer {cfg.token}'} if cfg.token else {}
+            async with session.get(f"{cfg.url('chat')}/api/tags", headers=headers) as resp:
+                if resp.status == 200:
+                    return True, ''
+                if resp.status == 401:
+                    return False, (
+                        'Perch refused that token — it is unknown or has been revoked. Perch '
+                        'cannot show a token twice, so mint a new one in its console (the '
+                        'Connect page) and paste that.'
+                    )
+                if resp.status == 403:
+                    return False, 'Perch knows that token but it lacks the scope for chat.'
+                return False, f'Perch answered the token check with HTTP {resp.status}.'
+    except (TimeoutError, aiohttp.ClientError) as exc:
+        return False, f'could not reach Perch\'s chat service to check the token: {exc}'
 
 
 async def probe(cfg: PerchConfig, timeout: float = 3.0) -> dict[str, bool]:  # noqa: ASYNC109 - passed to aiohttp.ClientTimeout, which is the right mechanism

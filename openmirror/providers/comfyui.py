@@ -36,7 +36,7 @@ import aiohttp
 from openmirror.media import workflow as workflow_mod
 from openmirror.media.params import Param
 from openmirror.net.transport import Transport
-from openmirror.providers.base import GeneratedMedia, VideoProvider
+from openmirror.providers.base import GeneratedMedia, VideoProvider, refused
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +69,25 @@ class ComfyUIProvider(VideoProvider):
         if self.api_key:
             h['Authorization'] = f'Bearer {self.api_key}'
         return h
+
+    async def check(self) -> None:
+        """Prove the address and the key, by asking the server something.
+
+        Needed because `models` cannot: ComfyUI's "models" are the workflow
+        templates on this disk, so listing them never touches the server. A
+        Test button that only called `models` reported a connection with no key
+        — or no server — as working, as long as the templates directory
+        existed. The queue is the cheapest authenticated thing to ask for.
+        """
+        try:
+            async with self.transport.session(15) as session:
+                async with session.get(f'{self.base_url}/queue', headers=self._headers()) as resp:
+                    if resp.status in (401, 403):
+                        raise refused(self.provider_id, self.base_url, resp.status)
+                    if resp.status != 200:
+                        raise RuntimeError(f'{self.provider_id}: {self.base_url}/queue answered HTTP {resp.status}')
+        except aiohttp.ClientError as exc:
+            raise RuntimeError(f'{self.provider_id}: could not reach {self.base_url}: {exc}') from exc
 
     def _template_path(self, model: str) -> Path:
         # Resolved and checked against the directory, because a model name

@@ -29,6 +29,8 @@ from openmirror.providers.base import Modality
 #: covers every service that copied that request format, which is most of them.
 Adapter = Literal[
     'openai', 'anthropic', 'ollama', 'a1111', 'comfyui', 'voyage', 'google',
+    # One host that becomes up to five providers. See openmirror.providers.perch.
+    'perch',
     # Image and video, which is where the shapes stop being interchangeable.
     # Every one of these is a submit-poll-download job API that agrees with
     # the others about nothing except that structure — see
@@ -63,6 +65,25 @@ VIDEO = frozenset({Modality.VIDEO})
 
 
 HOSTS: tuple[Host, ...] = (
+    # First, so it is what the Add form starts on: an install with only Perch
+    # configured is a complete install, and this project's own GPU host is the
+    # connection most people opening that form have come to make.
+    Host(
+        id='perch',
+        label='Perch',
+        adapter='perch',
+        base_url='http://127.0.0.1',
+        env_key='PERCH_TOKEN',
+        modalities=CHAT_AND_EMBED | STT | TTS | IMAGE | VIDEO,
+        local=True,
+        note=(
+            'Your own GPU host, as one connection. The address is the host only — its '
+            'services are found on their usual ports (chat 11434, dictation 8080, images '
+            '7860, video 8188, speech 8880) and whichever are switched on are connected. '
+            'The key is a token from Perch\'s console, and it is checked before anything '
+            'is saved.'
+        ),
+    ),
     Host(
         id='openai',
         label='OpenAI',

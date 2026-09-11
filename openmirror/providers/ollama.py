@@ -30,6 +30,7 @@ from openmirror.providers.base import (
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
+    refused,
 )
 from openmirror.providers.control_tokens import strip_control_tokens
 
@@ -220,6 +221,10 @@ class OllamaProvider(ChatProvider, EmbeddingProvider):
         """
         async with self._session(30) as session:
             async with session.get(f'{self.base_url}/api/tags', headers=self._headers()) as resp:
+                if resp.status in (401, 403):
+                    # Refused, and said so. Returned as [] this read as "nothing
+                    # pulled yet" and the Test button reported it as a success.
+                    raise refused(self.provider_id, self.base_url, resp.status, 'Stock Ollama has no keys, so a 401 here usually means it sits behind an auth proxy — if this is Perch, connect it as Perch in Settings → Connections.')
                 if resp.status != 200:
                     return []
                 body = await resp.json()

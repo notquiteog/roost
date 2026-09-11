@@ -44,6 +44,7 @@ from openmirror.providers.base import (
     ToolUseBlock,
     Transcript,
     TTSProvider,
+    refused,
 )
 from openmirror.providers.control_tokens import strip_control_tokens
 
@@ -266,6 +267,10 @@ class OpenAICompatProvider(ChatProvider, EmbeddingProvider, STTProvider, TTSProv
     async def models(self) -> list[dict[str, Any]]:
         async with self._session() as session:
             async with session.get(f'{self.base_url}/models', headers=self._headers()) as resp:
+                if resp.status in (401, 403):
+                    # Refused, and said so. Returned as [] this read as "nothing
+                    # pulled yet" and the Test button reported it as a success.
+                    raise refused(self.provider_id, self.base_url, resp.status)
                 if resp.status != 200:
                     return []
                 body = await resp.json()

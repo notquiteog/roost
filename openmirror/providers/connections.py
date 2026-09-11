@@ -232,6 +232,17 @@ def build(conn: Connection) -> tuple[ProviderInfo, dict[Modality, Any]]:
         from openmirror.providers.ideogram import IdeogramProvider
 
         impls = {Modality.IMAGE: one(IdeogramProvider)}
+    elif conn.adapter == 'perch':
+        # Every service Perch could offer, assumed up. That is what building
+        # means everywhere else in this function — the shape of a connection,
+        # without touching the network. Registering one goes through
+        # `register` below, which probes first and gives each live service its
+        # own provider id; this is for the callers that only want the shape.
+        # No transport is handed over because a Perch connection refuses Tor
+        # when it is saved rather than carrying a toggle it cannot honour.
+        from openmirror.providers import perch as perch_mod
+
+        impls = perch_mod.build(perch_mod.from_connection(conn))
     else:
         from openmirror.providers.openai_compat import OpenAICompatProvider
         from openmirror.providers.sora import SoraProvider
@@ -264,6 +275,36 @@ def build(conn: Connection) -> tuple[ProviderInfo, dict[Modality, Any]]:
         base_url=conn.base_url,
     )
     return info, impls
+
+
+async def register(conn: Connection, registry: Any) -> list[str]:
+    """Register one stored connection. Returns the provider ids it became.
+
+    One connection is usually one provider, and then this is `build` plus
+    `register`. Perch is the exception it exists for: one host, one token, and
+    up to five providers — one per live service, each under its own id, so
+    chat can be routed at Perch while images go somewhere else. Probing is what
+    decides which, which is why this is async where `build` is not.
+    """
+    if conn.adapter == 'perch':
+        from openmirror.providers import perch as perch_mod
+
+        cfg = perch_mod.from_connection(conn)
+        available = await perch_mod.probe(cfg)
+        return registry.register_perch(cfg, available, connection=conn)
+
+    info, impls = build(conn)
+    registry.register(info, impls, connection=conn)
+    return [info.id]
+
+
+def provider_ids(conn: Connection) -> list[str]:
+    """Every provider id a connection may have registered, for removing it."""
+    if conn.adapter == 'perch':
+        from openmirror.providers import perch as perch_mod
+
+        return list(perch_mod.PROVIDER_IDS)
+    return [conn.id]
 
 
 def from_host(

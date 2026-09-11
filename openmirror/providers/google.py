@@ -30,7 +30,7 @@ from __future__ import annotations
 from typing import Any
 
 from openmirror.net.transport import Transport
-from openmirror.providers.base import EmbeddingProvider
+from openmirror.providers.base import EmbeddingProvider, refused
 
 # Google names a task rather than an input type. The two that matter map onto
 # the same distinction Voyage draws.
@@ -120,6 +120,10 @@ class GoogleProvider(EmbeddingProvider):
         """
         async with self.transport.session(30) as session:
             async with session.get(f'{self.base_url}/models', headers=self._headers()) as resp:
+                if resp.status in (401, 403):
+                    # Refused, and said so. Returned as [] this read as "nothing
+                    # pulled yet" and the Test button reported it as a success.
+                    raise refused(self.provider_id, self.base_url, resp.status)
                 if resp.status != 200:
                     return []
                 body = await resp.json()
