@@ -92,23 +92,53 @@ export class Capture {
     this.ctx = null;
     this.node = null;
     this.muted = false;
+    // Bumped by every stop() and every start(). Coming up takes two awaits —
+    // the permission prompt and the worklet — and neither caller awaits
+    // start(), so a call that ends in that window used to run on into a
+    // torn-down Capture and fail with `this.ctx is null` reported as "the
+    // microphone could not start". Worse, the stream it had already been
+    // granted was never stopped: the capture light stayed on.
+    this.run = 0;
   }
 
   async start(rate, onFrame) {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    await this.ctx.audioWorklet.addModule('/static/capture-worklet.js');
-    const source = this.ctx.createMediaStreamSource(this.stream);
-    this.node = new AudioWorkletNode(this.ctx, 'openmirror-capture', { processorOptions: { targetRate: rate } });
-    this.node.port.onmessage = (e) => {
-      if (!this.muted) onFrame(e.data.buffer);
-    };
-    source.connect(this.node);
+    const run = ++this.run;
+    // Held locally until the graph is whole, so that a stop() arriving
+    // mid-await has nothing half-built to trip over and this can clean up
+    // after itself.
+    let stream = null;
+    let ctx = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      if (run !== this.run) return;
+
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      await ctx.audioWorklet.addModule('/static/capture-worklet.js');
+      if (run !== this.run) return;
+
+      const source = ctx.createMediaStreamSource(stream);
+      const node = new AudioWorkletNode(ctx, 'openmirror-capture', { processorOptions: { targetRate: rate } });
+      node.port.onmessage = (e) => {
+        if (!this.muted) onFrame(e.data.buffer);
+      };
+      source.connect(node);
+
+      this.stream = stream;
+      this.ctx = ctx;
+      this.node = node;
+      stream = ctx = null;  // handed over; stop() owns them now.
+    } finally {
+      // Whatever is still local belongs to a start that was stopped or threw,
+      // and nothing else will ever hold it.
+      if (ctx) { try { ctx.close(); } catch { /* never ran */ } }
+      if (stream) for (const track of stream.getTracks()) track.stop();
+    }
   }
 
   stop() {
+    this.run++;
     if (this.node) this.node.disconnect();
     if (this.ctx) { try { this.ctx.close(); } catch { /* already closed */ } }
     if (this.stream) for (const track of this.stream.getTracks()) track.stop();
