@@ -160,12 +160,37 @@ app.include_router(autopilot_router.http)
 
 
 STATIC = Path(__file__).parent / 'static'
-app.mount('/static', StaticFiles(directory=STATIC), name='static')
+
+
+class Revalidated(StaticFiles):
+    """Assets a browser checks with us before reusing.
+
+    With no `Cache-Control` header a browser invents a freshness window from
+    the file's age — Chromium takes a tenth of it — and reuses the page's
+    JavaScript without asking. That is how an updated interface goes on running
+    last week's code until somebody thinks to hard-refresh, and the bug gets
+    blamed on the change that appeared to do nothing. It cost an afternoon
+    here: a fix was live on the server and the page in front of it still had
+    the old handler.
+
+    `no-cache` does not mean "do not cache". The copy is kept and revalidated,
+    and an unchanged file comes back as a 304 with no body — which these
+    already answer correctly, by ETag.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers.setdefault('Cache-Control', 'no-cache')
+        return response
+
+
+app.mount('/static', Revalidated(directory=STATIC), name='static')
 
 
 @app.get('/')
 async def index() -> FileResponse:
-    return FileResponse(STATIC / 'index.html')
+    # The page that loads those assets must not be a stale copy either.
+    return FileResponse(STATIC / 'index.html', headers={'Cache-Control': 'no-cache'})
 
 
 @app.get('/healthz')

@@ -8,6 +8,7 @@
 # Built by `build.py` beside this, which also names the result for Tauri.
 
 import os
+import pathlib
 
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
@@ -24,7 +25,24 @@ datas = collect_data_files('openmirror')
 # sqlite-vec is a loadable SQLite extension that sits beside its __init__ as a
 # plain file, which no import ever names. Without this the release falls back
 # to the Python scan and says so once in the log — correct, only slower.
+#
+# The hook alone does not find it: `collect_dynamic_libs('sqlite_vec')` and
+# `collect_data_files` both come back empty, and a release frozen on that
+# looked for `sqlite_vec/vec0.so` at run time, missed it, and scanned. So the
+# file is named by path as well, into the package directory the loader reads.
 binaries = collect_dynamic_libs('sqlite_vec')
+try:
+    import sqlite_vec
+except ImportError:
+    # A build without the `vec` extra. Memory search scans, and says so once.
+    pass
+else:
+    _package = pathlib.Path(sqlite_vec.__file__).parent
+    binaries += [
+        (str(found), 'sqlite_vec')
+        for found in sorted(_package.glob('vec0.*'))
+        if found.suffix in ('.so', '.dylib', '.dll')
+    ]
 
 a = Analysis(
     [os.path.join(SPECPATH, 'entry.py')],

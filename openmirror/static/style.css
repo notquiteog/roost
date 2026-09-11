@@ -1319,8 +1319,10 @@ button.tiny { padding: 2px 7px; font-size: 11px; border-radius: 6px; }
 .shot-tool {
   width: 26px; height: 26px; padding: 0; border-radius: 7px;
   font-size: 13px; line-height: 1; border: none;
-  background: color-mix(in srgb, var(--solid) 82%, transparent); color: var(--on-solid);
-  backdrop-filter: blur(8px);
+  /* Opaque rather than blurred. These sit on top of a card that may be a
+     playing video, and a backdrop filter over moving pictures is re-blurred
+     every frame — which on some drivers flickers the frame underneath it. */
+  background: var(--solid); color: var(--on-solid);
 }
 .shot-tool:hover { background: var(--solid); }
 

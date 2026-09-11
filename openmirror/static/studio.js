@@ -492,6 +492,9 @@ function paintJobs(jobs) {
 }
 
 let lastDone = 0;
+//: A finished job arrived while the lightbox was open, so the gallery is out
+//: of date and will be rebuilt when it closes. See `tickJobs`.
+let galleryStale = false;
 
 async function tickJobs() {
   const data = await json('/api/media/jobs');
@@ -505,7 +508,11 @@ async function tickJobs() {
   const done = jobs.filter((j) => j.state === 'done').length;
   if (done > lastDone) {
     lastDone = done;
-    await loadGallery(true);
+    // Never while the lightbox is open: a refresh rebuilds every card, and
+    // swapping the one being watched out mid-frame is a flash with no
+    // explanation attached to it. It waits for the lightbox to close.
+    if ($('#shot-dialog').open) galleryStale = true;
+    else await loadGallery(true);
   }
 
   if (!live && jobTimer) {
@@ -562,10 +569,11 @@ function card(item, index) {
     // videos is a grid that pins a laptop fan, and a grid of twelve still
     // frames tells you nothing about which one moved correctly.
     box.onmouseenter = () => video.play().catch(() => {});
-    box.onmouseleave = () => {
-      video.pause();
-      video.currentTime = 0;
-    };
+    // Paused where it got to, not rewound. Rewinding made a pointer crossing
+    // the grid restart every clip it passed over, and a row of clips all
+    // snapping back to their first frame reads as the video being broken
+    // rather than as a preview stopping.
+    box.onmouseleave = () => video.pause();
     box.appendChild(video);
     box.appendChild(el('span', 'badge', 'video'));
   } else {
@@ -803,6 +811,10 @@ function wireLightbox() {
   dialog.addEventListener('close', () => {
     shown = -1;
     $('#shot-stage').textContent = '';
+    if (galleryStale) {
+      galleryStale = false;
+      loadGallery(true);
+    }
   });
   // Clicking the backdrop, which is the dialog element itself outside its
   // own content box.
