@@ -43,7 +43,8 @@ one, and watching one work are different kinds of attention:
 ## What works today
 
 **An agent that acts on the machine.** Read, write, edit, multi-edit, patch,
-outline, list, glob, grep, shell, plan and asking you a question — behind an
+notebooks, outline, list, glob, grep, a shell that can leave things running, a
+to-do list and asking you a question — behind an
 approval policy that grades each call by what it would actually do. `git
 status` and `rm -rf /` are the same tool, so the risk is assessed from the
 arguments, not the tool name. Everything is confined to one working root, and
@@ -53,16 +54,68 @@ Each of those exists because of a specific failure. `multi_edit` applies every
 edit to a buffer and writes once, so a refactor cannot land halfway.
 `read_files` because reading four files should not cost four model turns.
 `outline` because reading two thousand lines to find one function wastes a
-context window. `plan` because a long task with no visible plan cannot be
-followed by the person watching it.
+context window. `todo` because a long task with no visible plan cannot be
+followed by the person watching it — so the list is pinned above the box you
+type in, and stays in view while the transcript scrolls.
 
 **And a way to offer fewer of them.** A long tool list is not free: gemma4:12b
 given the full set opened a page and then reported that it had no way to
 browse. The same model, the same task, the same prompt, with only the browser
 tools — twenty-six seconds, correct, first try. So a session can be narrowed
-to `browser`, `files`, `shell`, `web`, `desktop`, `media` or any combination,
-and `ask_user` is always in whatever you pick, because a session that cannot
-ask is a session that guesses.
+to `browser`, `files`, `shell`, `todo`, `agents`, `skills`, `web`, `desktop`,
+`media` or any combination, and `ask_user` is always in whatever you pick,
+because a session that cannot ask is a session that guesses.
+
+**Subagents.** `agent` hands a self-contained piece of work to another agent
+with a fresh context of its own: a broad search whose working-out nobody needs
+to keep, or several independent pieces at once — agent calls in one response
+run in parallel. Three kinds are built in (`explore`, which cannot change
+anything whatever mode the session is in; `general`; `research`), and more are
+markdown files in `.openmirror/agents/` or `.claude/agents/` — the format other
+clients already write, with their tool names translated. A subagent is a
+session with nothing of its own but its conversation: its steps nest in the
+transcript under the call that started it, its approvals are asked of you in
+the same place and under the same mode, and it cannot start agents of its own,
+touch the to-do list, or use the session's one browser and one screen. One sent
+off with `background: true` reports when it finishes, without being asked.
+
+**Plan mode.** A sixth approval mode. The agent investigates with the tools
+that only look, then puts a plan to you through `propose_plan`, and nothing
+that changes anything runs until you say yes — at which point you also choose
+how much it may then do unasked. The editing tools are hidden from the model
+while it plans, and the way out is hidden while it does not.
+
+**Skills, and `/` in the composer.** A skill is a folder with a `SKILL.md` in
+it: when it applies, how to do the job, and whatever files the job needs. Only
+names and one-line descriptions sit in front of the model; the body is loaded
+when a request matches. They come from the project, from your home directory
+and from openmirror itself — `init` writes an AGENTS.md, `review` reviews
+uncommitted changes — in the layout other clients use, so ones you already have
+work here. Typing `/` lists them, alongside `/compact` and `/clear`.
+
+**Language servers.** `lsp` asks a real language server where something is
+defined, everywhere it is used, what type it is, and what the compiler thinks
+is wrong — rust-analyzer, pyright or pylsp, typescript-language-server, gopls or
+clangd, whichever is installed, and not offered at all where none is. Once one
+is running, an edit that breaks the file hears so in its own result, before the
+model moves on. Starting one is graded as running a command, because
+rust-analyzer runs the project's build scripts to answer.
+
+**Notebooks.** `read_file` shows a Jupyter notebook as its cells and their
+outputs — plots included, as pictures the model can look at — rather than as
+JSON, and `notebook_edit` replaces, inserts or deletes one cell, clearing the
+outputs of code it changed, since they no longer match it.
+
+**Background work.** `shell` with `background: true` leaves a dev server or a
+long build running; `tasks` reads what it has printed and stops it, and the
+model is told when it finishes. A strip above the composer shows what is
+running, with a Stop button. Interrupting a turn leaves background work alone;
+closing the session stops it.
+
+**Compaction.** A long conversation is summarised to make room — only what came
+before the current turn, so the work in hand is never cut in half — and
+`/compact` does it on request. Afterwards every file has to be read again
+before it is overwritten: a summary says a file was read, not what it said.
 
 **Duplex voice, with barge-in.** Both directions are open at once. Voice
 detection runs on the server, so when you start talking over the assistant it
@@ -408,6 +461,28 @@ Three things that only a live model found, all now fixed and pinned by tests:
   could not browse. Identical calls are now counted per turn: the first few
   run, and a loop is stopped with a tool result that says so — visibly, so a
   turn that stops does not simply go quiet.
+* **A program on PATH is not a program that is installed.** On the machine
+  this was built on, `rust-analyzer` resolved — to rustup's proxy, which
+  rustup links for every tool it knows about and which exits at once when the
+  component is missing. The language-server tool was offered and failed on
+  first use. A rustup proxy is now asked whether anything is behind it.
+* **An id is not unique because it is called one.** Ollama numbers tool calls
+  per response, so every response says `call_1`. Harmless while calls ran one
+  at a time; the moment two subagents waited on approvals at once, two
+  questions were filed under one answer. The session now makes every id it
+  hands out its own.
+* **`**/` includes the folder you are in.** fnmatch reads `**/*.py` as "a
+  directory, a slash, then something ending in .py", so a file at the top of
+  the search never matched — and the first thing gemma4:12b tried, in a folder
+  holding two Python files, was exactly that pattern, which told it there were
+  none. `glob` now tries the pattern with the `**/` taken out as well.
+* **A reply can be empty.** gemma4:12b through Ollama sometimes answers a tool
+  result with nothing — no words, no call, only reasoning, into which its
+  template leaks `<|channel>thought` — and the turn used to end there,
+  silently, with the work not done. It is now told once and asked again. That
+  turns some of those silences into work, not all of them: with reasoning off
+  it stops falling silent but loops and ticks off steps it has not done, so
+  reasoning stays on and the nudge is a mitigation rather than a fix.
 
 ## What is not built yet
 
@@ -506,6 +581,7 @@ runs commands on your machine. Set `OPENMIRROR_TOKEN` before moving it.
 | mode | runs without asking |
 |---|---|
 | `read_only` | reads. Writing tools are not even offered to the model. |
+| `plan` | reads, until you approve its plan. `propose_plan` asks you, and your answer picks the mode it carries on in. |
 | `ask` *(default)* | reads |
 | `auto_edit` | reads, file writes |
 | `trusted` | reads, writes, commands, network |

@@ -58,9 +58,10 @@ def test_a_purchase_is_confirmed_in_every_mode(mode):
     months later.
     """
     decision, why = ApprovalPolicy(mode=mode).decide(buying())
-    if mode is Mode.READ_ONLY:
+    if mode in (Mode.READ_ONLY, Mode.PLAN):
         # A mode whose promise is that nothing changes must not offer a
-        # checkout prompt while claiming to be read-only.
+        # checkout prompt while claiming to be read-only. Plan mode makes the
+        # same promise until its plan is approved, and keeps it the same way.
         assert decision is Decision.DENY, why
     else:
         assert decision is Decision.ASK, f'{mode.value} would have bought it: {why}'
@@ -69,7 +70,7 @@ def test_a_purchase_is_confirmed_in_every_mode(mode):
 @pytest.mark.parametrize('mode', list(Mode))
 def test_a_secret_is_confirmed_in_every_mode(mode):
     decision, why = ApprovalPolicy(mode=mode).decide(entering())
-    expected = Decision.DENY if mode is Mode.READ_ONLY else Decision.ASK
+    expected = Decision.DENY if mode in (Mode.READ_ONLY, Mode.PLAN) else Decision.ASK
     assert decision is expected, f'{mode.value}: {why}'
 
 

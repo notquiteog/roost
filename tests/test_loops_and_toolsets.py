@@ -131,10 +131,14 @@ def test_asking_a_question_is_always_possible():
 
 
 def test_an_unknown_name_is_taken_as_a_tool_name():
-    """So a caller wanting exactly `shell` and `read_file` can say so without
-    a group having to exist for it."""
-    allowed = resolve_toolset(['shell', 'read_file'])
-    assert allowed == {'ask_user', 'shell', 'read_file'}
+    """So a caller wanting exactly `grep` and `read_file` can say so without
+    a group having to exist for it.
+
+    (Not `shell` any more: that is a group now, which brings `tasks` with it —
+    a command left running in the background with no way to read it back is
+    half a feature.)"""
+    allowed = resolve_toolset(['grep', 'read_file'])
+    assert allowed == {'ask_user', 'grep', 'read_file'}
 
 
 def test_asking_for_nothing_means_everything():
@@ -163,10 +167,12 @@ async def test_every_group_names_tools_that_exist():
         )
     real = set(session.tools)
 
-    # These three are only present when their capability is attached, which a
-    # plain session has none of.
+    # These are only present when their capability is attached, which a plain
+    # session has none of. `lsp` is one of them: it exists only where a
+    # language server is installed, and a plain session is given none.
     optional = set(TOOLSETS['browser']) | set(TOOLSETS['desktop']) | set(TOOLSETS['media'])
     optional |= set(TOOLSETS['memory']) | set(TOOLSETS['web']) | set(TOOLSETS['system'])
+    optional |= {'lsp'}
 
     for group, names in TOOLSETS.items():
         for name in names:

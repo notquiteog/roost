@@ -120,6 +120,34 @@ class Config:
     # moment you want it is always after the fact.
     checkpoints_enabled: bool = field(default_factory=lambda: _bool('OPENMIRROR_CHECKPOINTS', True))
 
+    # --- agents, skills and the code ---------------------------------------
+    # Subagents: the `agent` tool, in the foreground and the background. On,
+    # because every call a subagent makes is graded and asked about exactly
+    # like the session's own; what one costs is tokens, not permission.
+    agents_enabled: bool = field(default_factory=lambda: _bool('OPENMIRROR_AGENTS', True))
+    # Skills: the bundled ones, this person's (~/.openmirror/skills and
+    # ~/.claude/skills) and the project's own.
+    skills_enabled: bool = field(default_factory=lambda: _bool('OPENMIRROR_SKILLS', True))
+    # Language servers, for the `lsp` tool and for errors after an edit. Only
+    # ever does anything where a server is installed; the tool is not offered
+    # at all where none is.
+    lsp_enabled: bool = field(default_factory=lambda: _bool('OPENMIRROR_LSP', True))
+    lsp_config: Path = field(
+        default_factory=lambda: Path(os.getenv('OPENMIRROR_LSP_CONFIG', '')) if os.getenv('OPENMIRROR_LSP_CONFIG')
+        else Path.cwd() / '.lsp.json'
+    )
+    # When the conversation is summarised to make room, in estimated tokens.
+    # Checked at the start of each request, and it only ever summarises what
+    # came *before* the current turn, so the work in hand is never cut in half.
+    # 0 turns it off; `/compact` in the composer still works either way.
+    #
+    # The default suits a hosted model with a large window. A local model's
+    # real limit is its context length — Ollama's `num_ctx` — and this should
+    # sit well under that, because Ollama does not refuse an overlong prompt:
+    # it drops the beginning of it, silently, and the first thing to go is the
+    # system prompt.
+    compact_at: int = field(default_factory=lambda: _int('OPENMIRROR_COMPACT_AT', 100_000))
+
     # --- MCP --------------------------------------------------------------
     # Servers are read from a `.mcp.json` in the shape the rest of the
     # ecosystem uses, so a file written for another client works unchanged.

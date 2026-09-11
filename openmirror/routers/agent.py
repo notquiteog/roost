@@ -117,6 +117,25 @@ async def list_toolsets() -> dict[str, object]:
     return {'toolsets': {name: list(tools) for name, tools in TOOLSETS.items()}}
 
 
+@http.get('/{session_id}/commands')
+async def list_commands(session_id: str) -> dict[str, object]:
+    """What `/` can be followed by in this session: commands, then skills."""
+    session = manager.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail='no such session')
+    return {'commands': session.commands()}
+
+
+@http.get('/{session_id}/tasks')
+async def list_tasks(session_id: str) -> dict[str, object]:
+    """Background work in this session: commands left running, agents sent off."""
+    session = manager.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail='no such session')
+    tasks = session.tasks.list() if session.tasks is not None else []
+    return {'tasks': [t.describe() for t in tasks]}
+
+
 @http.get('/{session_id}/checkpoints')
 async def list_checkpoints(session_id: str) -> dict[str, object]:
     session = manager.get(session_id)
@@ -252,8 +271,12 @@ async def agent_socket(
                 # the next decision — a call already in flight was decided
                 # under the old rule, and re-deciding it retroactively would
                 # be a lie about what ran.
+                #
+                # The confirmation comes back through the session's own log
+                # rather than as a reply on this socket, so every client
+                # attached to the session sees the change, and a replay does.
                 try:
-                    agent.policy.mode = Mode(command.get('mode', ''))
+                    await agent.set_mode(command.get('mode', ''))
                 except ValueError:
                     await ws.send_json({
                         'type': 'error',
@@ -262,11 +285,17 @@ async def agent_socket(
                     })
                 else:
                     log.info('session %s: approval mode set to %s', agent.id, agent.policy.mode.value)
+            elif kind == 'task.stop':
+                task_id = str(command.get('task_id', ''))
+                if agent.tasks is None or agent.tasks.get(task_id) is None:
                     await ws.send_json({
-                        'type': 'policy.changed',
-                        'mode': agent.policy.mode.value,
-                        'policy': agent.policy.describe(),
+                        'type': 'error', 'message': f'no background task {task_id!r}', 'retryable': False,
                     })
+                else:
+                    # In a task of its own: stopping a server politely can
+                    # take a few seconds, and this loop is also the one that
+                    # delivers the next approval.
+                    asyncio.create_task(agent.tasks.stop(task_id, by='person'))
             elif kind == 'turn.interrupt':
                 agent.interrupt()
             elif kind == 'session.close':

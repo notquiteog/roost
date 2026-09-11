@@ -20,19 +20,13 @@ of a context window.** A structural sketch — what is defined, and where — is
 usually the whole of what "have a look at X" needs, and it is a tenth of the
 tokens. Regex per language rather than a parser: a real parser means a
 dependency per language and a build step, and gets the same answer for the
-question actually being asked.
-
-**`plan`, because a long task with no visible plan cannot be followed.** Not
-for the model's benefit — models track their own work perfectly well — but for
-the person watching one grind through eleven steps with no idea which one it
-is on, or whether the thing they asked for is still on the list.
+question actually being asked. Where a language server is installed, `lsp`
+answers the harder version of the question.
 """
 
 from __future__ import annotations
 
 import re
-import time
-from dataclasses import dataclass, field
 from typing import Any
 
 from openmirror.agent.tools.base import (
@@ -330,98 +324,6 @@ class OutlineTool(Tool):
 
 
 # ---------------------------------------------------------------------------
-# The plan
-# ---------------------------------------------------------------------------
-
-
-@dataclass(slots=True)
-class Step:
-    text: str
-    state: str = 'todo'          # todo | doing | done | dropped
-    at: float = field(default_factory=time.time)
-
-
-class PlanTool(Tool):
-    """A visible task list for a long piece of work.
-
-    Held on the tool rather than in a file, because it belongs to this session
-    and writing it to the working root would mean the agent creating a file
-    nobody asked for — which the prompt tells it not to do, and rightly.
-    """
-
-    name = 'plan'
-    description = (
-        'Write or update the task list for what you are doing, so the person watching can '
-        'see the shape of it and what is left. Use it for anything that takes more than two '
-        'or three steps: send the whole list each time, with each item marked todo, doing, '
-        'done or dropped. Exactly one item should be `doing`. Keep it to real steps — a plan '
-        'listing "read the file" as an item is noise.'
-    )
-    input_schema = {
-        'type': 'object',
-        'properties': {
-            'steps': {
-                'type': 'array',
-                'items': {
-                    'type': 'object',
-                    'properties': {
-                        'text': {'type': 'string'},
-                        'state': {'type': 'string', 'description': 'todo, doing, done or dropped'},
-                    },
-                    'required': ['text'],
-                },
-            },
-        },
-        'required': ['steps'],
-    }
-
-    STATES = ('todo', 'doing', 'done', 'dropped')
-
-    def __init__(self) -> None:
-        self.steps: list[Step] = []
-
-    def assess(self, args: dict[str, Any], ctx: ToolContext) -> Assessment:
-        steps = args.get('steps')
-        if not isinstance(steps, list):
-            return Assessment(risk=Risk.READ, summary='', invalid='steps must be a list')
-        for step in steps:
-            if not isinstance(step, dict) or not (step.get('text') or '').strip():
-                return Assessment(risk=Risk.READ, summary='', invalid='every step needs text')
-            state = step.get('state', 'todo')
-            if state not in self.STATES:
-                return Assessment(
-                    risk=Risk.READ, summary='',
-                    invalid=f'{state!r} is not a state — use todo, doing, done or dropped',
-                )
-        doing = sum(1 for s in steps if s.get('state') == 'doing')
-        if doing > 1:
-            return Assessment(
-                risk=Risk.READ, summary='',
-                invalid=f'{doing} steps are marked doing — mark exactly one, so the person '
-                        'watching can tell where you are',
-            )
-        done = sum(1 for s in steps if s.get('state') == 'done')
-        # A read: it changes nothing outside this conversation, and a plan that
-        # needed approving would be a plan nobody wrote.
-        return Assessment(risk=Risk.READ, summary=f'plan: {done}/{len(steps)} done')
-
-    async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
-        self.steps = [Step(text=s['text'].strip(), state=s.get('state', 'todo')) for s in args['steps']]
-
-        marks = {'todo': '[ ]', 'doing': '[~]', 'done': '[x]', 'dropped': '[-]'}
-        lines = [f'{marks[s.state]} {s.text}' for s in self.steps]
-        done = sum(1 for s in self.steps if s.state == 'done')
-        return Output(
-            content='\n'.join(lines) or '(empty plan)',
-            display={
-                'steps': [{'text': s.text, 'state': s.state} for s in self.steps],
-                'done': done,
-                'total': len(self.steps),
-            },
-        )
-
-
-# ---------------------------------------------------------------------------
 # Patches
 # ---------------------------------------------------------------------------
 
@@ -581,7 +483,7 @@ def _find(lines: list[str], block: list[str], near: int) -> int | None:
 
 
 def code_tools() -> list[Tool]:
-    return [MultiEditTool(), ReadFilesTool(), OutlineTool(), PlanTool(), ApplyPatchTool()]
+    return [MultiEditTool(), ReadFilesTool(), OutlineTool(), ApplyPatchTool()]
 
 
 __all__ = ['code_tools', 'outline_text']

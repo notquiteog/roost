@@ -1,8 +1,10 @@
 # Extending it
 
-Three mechanisms, and one thing that undoes what they do. Two of them are MCP
-pointing in opposite directions: openmirror using everybody else's tools, and
-everybody else's clients using openmirror.
+Two of the mechanisms here are MCP pointing in opposite directions: openmirror
+using everybody else's tools, and everybody else's clients using openmirror.
+Three more are files — skills, agent definitions and language-server settings
+— each in the shape other clients already write, so what you have made for one
+of them works here unchanged. And one thing undoes what the agent does.
 
 ## Using MCP servers
 
@@ -152,6 +154,139 @@ Resources it offers: `openmirror://capabilities` (what this install can do, and
 what it deliberately does not expose), `openmirror://providers`,
 `openmirror://memory/recent`, and the templates `openmirror://memory/search/{query}`
 and `openmirror://media/{id}`.
+
+## Skills
+
+A skill is a folder with a `SKILL.md` in it, and whatever else the job needs
+beside it:
+
+```
+.openmirror/skills/release/
+  SKILL.md
+  checklist.md
+```
+
+```markdown
+---
+name: release
+description: Cut a release — bump the version, write the changelog, tag it.
+argument-hint: "[version]"
+---
+
+Bump the version to $ARGUMENTS, then work through checklist.md …
+```
+
+Only `name` and `description` are in front of the model all the time, as one
+line each in the `skill` tool's description. The body is read when a request
+matches, and a file beside it only when the body points at it — through the
+tool's `file` argument, which reads inside that skill's folder and nowhere
+else. That ordering is the point: twenty skills cost twenty lines, not twenty
+documents, which matters most on the small models this project targets.
+
+They are looked for in these places, and a later one wins a name:
+
+| where | whose |
+|---|---|
+| `openmirror/skills/` | shipped: `init` and `review` |
+| `~/.claude/skills/`, `~/.openmirror/skills/` | yours, in every project |
+| `<root>/.claude/skills/`, `<root>/.openmirror/skills/` | the project's |
+
+A flat `commands/<name>.md` beside any of those is a skill too — the older
+shape of the same idea. `/name` in the composer runs one, with whatever follows
+it put where `$ARGUMENTS` is (or after the body, if it has no `$ARGUMENTS`), and
+`/` alone lists them. `disable-model-invocation: true` keeps a skill out of the
+model's list, for one that should only ever run because a person asked for it.
+
+A project's skills are the project's own text, which means somebody else may
+have written them. They are treated like AGENTS.md — instructions about how to
+work here, read by a model still bound by everything else — and they cannot
+widen what the approval policy allows, because nothing in them reaches it.
+
+## Agents
+
+`agent` starts a subagent: a session with a fresh context, a narrower tool list
+and instructions of its own, which does one task and reports back. Three kinds
+are built in:
+
+| kind | what it may do |
+|---|---|
+| `explore` | read and search. Capped at `read_only` whatever mode the session is in. |
+| `general` | everything the session can, less what no subagent gets |
+| `research` | the web tools, plus reading files. Only offered where the web tools are. |
+
+More are markdown files, one agent to a file, in `.openmirror/agents/` or
+`.claude/agents/` in the project, or the same under your home directory, the
+most local winning a name:
+
+```markdown
+---
+name: reviewer
+description: Reviews a change for bugs and reports them with file and line.
+tools: Read, Grep, Glob, Bash
+mode: read_only
+---
+
+You review code. …
+```
+
+`tools` narrows it, and other clients' names are translated — `Read` is
+`read_file`, `Bash` is `shell`, `Bash(git diff:*)` is `shell` too. `model` names
+a model this provider has; a vendor's alias such as `sonnet` or `inherit` means
+the session's own, since passing it on would be an error from every provider,
+that vendor's included. `mode: read_only` caps it the way `explore` is capped.
+
+What no subagent gets, whatever its file says, is decided in code: agents of
+its own, the to-do list, a question to the person, background work, and the
+session's hands — its one browser and its one screen. Everything it does is in
+the session's event log, tagged with the call that started it (`agent` on each
+event), and everything it wants approved is asked of you there, under the
+session's policy. Several `agent` calls in one response run at once, each on
+the real tree; the read-before-write rule is what keeps two of them from
+editing the same file blind.
+
+`background: true` starts one and returns at once. It shows in the strip above
+the composer, `tasks` reads its report, and the model is handed the report in
+its next request when it finishes.
+
+## Language servers
+
+`lsp` is offered where a language server is installed, and only there. Without
+configuration, the first of these found on PATH is used for its language:
+
+| language | servers, in order of preference |
+|---|---|
+| Python | `basedpyright-langserver`, `pyright-langserver`, `pylsp`, `jedi-language-server` |
+| TypeScript, JavaScript | `typescript-language-server` |
+| Rust | `rust-analyzer` |
+| Go | `gopls` |
+| C, C++ | `clangd` |
+
+A `.lsp.json` — `OPENMIRROR_LSP_CONFIG`, or the directory the daemon starts in,
+like `.mcp.json` — adds servers or switches them off:
+
+```json
+{
+  "servers": {
+    "zls":    { "command": "zls", "extensions": [".zig"] },
+    "pyright": { "command": "pyright-langserver", "args": ["--stdio"],
+                 "extensions": [".py"], "initializationOptions": {} },
+    "clangd": { "disabled": true, "extensions": [".c", ".h"] }
+  }
+}
+```
+
+A configured server takes its extensions from the defaults; a disabled one
+takes them without replacing them, which is how to say "not for C" without
+uninstalling anything. It is read by the daemon, not from the project the agent
+is working in: a server is a program the daemon runs, and a repository should
+not get to name one.
+
+The first question in a language with nothing running is graded `execute`,
+because starting a server can run the project's own code — rust-analyzer runs
+build scripts and proc macros — and every question after that is a read. Once
+a server is up, a file the agent writes is shown to it, and any errors it then
+reports are added to that write's result. A server is never started to do
+that: an edit was not graded as running anything.
 
 ## Rewind
 

@@ -1,10 +1,11 @@
 """Deciding what may run without asking.
 
 The whole point of grading risk is so that the question a person is asked is
-rare enough to be read. Five modes, each a line drawn at a different risk
+rare enough to be read. Six modes, each a line drawn at a different risk
 level, and the line is the only thing that varies:
 
     read_only     nothing that changes anything, ever
+    plan          reads run; nothing else does until a plan is approved
     ask           reads run; everything else is asked          (default)
     auto_edit     reads and file writes run; commands are asked
     trusted       commands run too; destructive things are asked
@@ -46,6 +47,10 @@ log = logging.getLogger(__name__)
 
 class Mode(StrEnum):
     READ_ONLY = 'read_only'
+    # read_only with a way out. The agent investigates, writes down what it
+    # would do, and asks — through `propose_plan` — to be let off the leash.
+    # The way out is a person answering, never the agent deciding it is ready.
+    PLAN = 'plan'
     ASK = 'ask'
     AUTO_EDIT = 'auto_edit'
     TRUSTED = 'trusted'
@@ -60,6 +65,7 @@ class Mode(StrEnum):
 # "do not check in about steps", which is a different sentence again.
 AUTO: dict[Mode, set[Risk]] = {
     Mode.READ_ONLY: {Risk.READ},
+    Mode.PLAN: {Risk.READ},
     Mode.ASK: {Risk.READ},
     Mode.AUTO_EDIT: {Risk.READ, Risk.WRITE},
     Mode.TRUSTED: {Risk.READ, Risk.WRITE, Risk.EXECUTE, Risk.NETWORK},
@@ -95,6 +101,12 @@ class Rule:
             return False
 
 
+PLANNING = (
+    'this session is planning: nothing that changes anything runs until the person approves '
+    'a plan, which you put to them with propose_plan'
+)
+
+
 def _fingerprint(call: ToolCall) -> str:
     """Identity of a call for the purpose of remembering a decision.
 
@@ -121,6 +133,10 @@ class ApprovalPolicy:
     # Tools that are always asked about regardless of mode or risk, for an
     # operator who wants a hard stop on one specific thing.
     always_ask: set[str] = field(default_factory=set)
+    # Where an approved plan goes back to: whatever the session was in before
+    # it started planning. Kept here because the policy is shared by a session
+    # and its subagents, and so is the answer to "what mode was this?".
+    previous: Mode | None = None
     _remembered: set[str] = field(default_factory=set, repr=False)
 
     def decide(self, call: ToolCall) -> tuple[Decision, str]:
@@ -144,6 +160,8 @@ class ApprovalPolicy:
         # checkout prompt while claiming to be read-only.
         if self.mode is Mode.READ_ONLY and call.risk in (Risk.PURCHASE, Risk.CREDENTIAL):
             return Decision.DENY, 'this session is read-only'
+        if self.mode is Mode.PLAN and call.risk in (Risk.PURCHASE, Risk.CREDENTIAL):
+            return Decision.DENY, PLANNING
 
         if call.risk is Risk.CREDENTIAL:
             if not self.allow_credentials:
@@ -172,6 +190,12 @@ class ApprovalPolicy:
         # session cannot change anything" must not be escapable by clicking yes.
         if self.mode is Mode.READ_ONLY:
             return Decision.DENY, 'this session is read-only'
+        # Plan mode refuses too, rather than asking call by call. Its promise is
+        # that the person sees the whole plan before anything moves, and a
+        # prompt for the first edit would be approving a step of a plan they
+        # have not been shown.
+        if self.mode is Mode.PLAN:
+            return Decision.DENY, PLANNING
 
         return Decision.ASK, f'{call.risk.value} needs your approval in {self.mode.value} mode'
 
@@ -195,6 +219,9 @@ class ApprovalPolicy:
         automatic. Saying otherwise in the one line a person reads at the top
         of a session would be the most consequential lie this file could tell.
         """
+        if self.mode is Mode.PLAN:
+            return 'plan (runs without asking: read; nothing else runs until you approve its plan)'
+
         auto = sorted(r.value for r in AUTO[self.mode])
         line = f'{self.mode.value} (runs without asking: {", ".join(auto)})'
 

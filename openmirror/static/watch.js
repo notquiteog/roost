@@ -71,6 +71,10 @@ function watchScreen(runId) {
    watching, and a build log scrolling past is the transcript again. */
 export function narrate(ev) {
   if (!run || ev.session_id !== run.session) return;
+  // A subagent's words are its own working, not the run's narration, and
+  // spliced in they would garble the sentence the run is in the middle of.
+  // Its tool calls still get a line each, like anything else the run does.
+  if (ev.agent && ev.type === 'text.delta') return;
 
   switch (ev.type) {
     case 'text.delta': {

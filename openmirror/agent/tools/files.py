@@ -61,6 +61,16 @@ class _Journal:
     def has_read(self, session: str, path: Path) -> bool:
         return path in self._seen.get(session, {})
 
+    def forget(self, session: str) -> None:
+        """Drop what this session has read, so every file is read again before a write.
+
+        For when the conversation that held those reads is gone — compacted
+        into a summary, or cleared. A summary says a file was read, not what
+        it said, and overwriting a file from a summary of it is exactly the
+        assumed-contents write this journal exists to stop.
+        """
+        self._seen.pop(session, None)
+
     def changed_since_read(self, session: str, path: Path) -> bool:
         """True if something else wrote the file after we read it.
 
@@ -110,7 +120,8 @@ class ReadTool(Tool):
         'Never include either in an edit, and never quote '
         'them back to the person — if they ask what a line says, answer with the line, not with '
         'the number and a tab in front of it. Use offset and limit for a file too large to read '
-        'at once.'
+        'at once. A Jupyter notebook is shown as its cells and their outputs, pictures included; '
+        'change one with notebook_edit.'
     )
     input_schema = {
         'type': 'object',
@@ -134,6 +145,12 @@ class ReadTool(Tool):
             raise ToolError(f'{args["path"]}: no such file')
         if path.is_dir():
             raise ToolError(f'{args["path"]}: is a directory — use list_dir or glob')
+        if path.suffix.lower() == '.ipynb':
+            # Before the size check: a notebook with a few plots in it is over
+            # the text limit, and what reaches the model is not the plots' base64.
+            from openmirror.agent.tools import notebook
+
+            return notebook.read(path, ctx)
         if _looks_binary(path):
             raise ToolError(f'{args["path"]}: looks like a binary file ({path.stat().st_size} bytes)')
         if path.stat().st_size > MAX_READ_BYTES:

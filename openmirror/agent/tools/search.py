@@ -63,6 +63,12 @@ class GlobTool(Tool):
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
         root = resolve_in_root(args['path'], ctx) if args.get('path') else ctx.cwd
         pattern = args['pattern']
+        # `**/` means "in any directory, including this one", and fnmatch does
+        # not know that: to it `**/*.py` needs a slash, so a file sitting in
+        # the root never matched. Found live — the first thing a 12B model
+        # tried was `**/*.py`, in a folder holding two Python files, and it was
+        # told there were none. The pattern with those removed is tried too.
+        flat = pattern.replace('**/', '')
 
         matches: list[Path] = []
         for dirpath, dirnames, filenames in os.walk(root):
@@ -73,7 +79,11 @@ class GlobTool(Tool):
                 # Matched against both the relative path and the bare name, so
                 # "*.py" behaves the way people expect rather than only matching
                 # files directly in the search root.
-                if fnmatch.fnmatch(str(rel), pattern) or fnmatch.fnmatch(name, pattern):
+                if (
+                    fnmatch.fnmatch(str(rel), pattern)
+                    or fnmatch.fnmatch(name, pattern)
+                    or (flat != pattern and fnmatch.fnmatch(str(rel), flat))
+                ):
                     matches.append(full)
             if len(matches) > MAX_RESULTS * 5:
                 break

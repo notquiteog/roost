@@ -14,17 +14,15 @@ from openmirror.agent import prompt as prompt_mod
 from openmirror.agent.approval import ApprovalPolicy, Mode
 from openmirror.agent.session import AgentSession
 from openmirror.agent.tools.ask import AskUserTool
-from openmirror.agent.tools.base import Tool
-from openmirror.agent.tools.code import (
-    ApplyPatchTool,
-    MultiEditTool,
-    OutlineTool,
-    PlanTool,
-    ReadFilesTool,
-)
+from openmirror.agent.tools.base import FILE_WRITERS, Tool
+from openmirror.agent.tools.code import ApplyPatchTool, MultiEditTool, OutlineTool, ReadFilesTool
 from openmirror.agent.tools.files import EditTool, ListDirTool, ReadTool, WriteTool
+from openmirror.agent.tools.notebook import NotebookEditTool
+from openmirror.agent.tools.planning import ProposePlanTool
 from openmirror.agent.tools.search import GlobTool, GrepTool
 from openmirror.agent.tools.shell import ShellTool
+from openmirror.agent.tools.tasks import TasksTool
+from openmirror.agent.tools.todo import TodoTool
 
 # What each named toolset contains. Groups rather than individual names,
 # because the choice a person actually makes is "this session is for browsing"
@@ -39,9 +37,11 @@ from openmirror.agent.tools.shell import ShellTool
 # The *list* was.
 TOOLSETS: dict[str, tuple[str, ...]] = {
     'files': ('read_file', 'read_files', 'write_file', 'edit_file', 'multi_edit',
-              'apply_patch', 'outline', 'list_dir', 'glob', 'grep'),
-    'shell': ('shell',),
-    'plan': ('plan',),
+              'apply_patch', 'notebook_edit', 'outline', 'list_dir', 'glob', 'grep', 'lsp'),
+    'shell': ('shell', 'tasks'),
+    'todo': ('todo',),
+    'agents': ('agent',),
+    'skills': ('skill',),
     'ask': ('ask_user',),
     'web': ('web_search', 'web_fetch', 'research'),
     'browser': ('browser_navigate', 'browser_read', 'browser_click', 'browser_type',
@@ -79,12 +79,14 @@ def default_tools() -> list[Tool]:
         EditTool(),
         MultiEditTool(),
         ApplyPatchTool(),
+        NotebookEditTool(),
         OutlineTool(),
         ListDirTool(),
         GlobTool(),
         GrepTool(),
         ShellTool(),
-        PlanTool(),
+        TasksTool(),
+        TodoTool(),
         AskUserTool(),
     ]
 
@@ -180,6 +182,17 @@ def build_session(
     toolset: list[str] | None = None,
     mcp: Any = None,
     checkpoints: Any = None,
+    # Subagents and skills, on unless turned off. `lsp` is the language
+    # servers this machine has (openmirror.agent.lsp.find_servers), or None.
+    agents: bool = True,
+    skills: bool = True,
+    lsp: list[Any] | None = None,
+    compact_at: int = 0,
+    # Where a person's own skills and agent definitions are looked for. None
+    # looks only in the project and in what ships with openmirror — which is
+    # what a test wants, since a test that passed because of whatever happens
+    # to be in someone's home directory has tested their home directory.
+    home: Path | None = None,
 ) -> AgentSession:
     root_path = Path(root).expanduser().resolve()
     if not root_path.is_dir():
@@ -200,10 +213,7 @@ def build_session(
     # rather than registered and refused. A model that can see `write_file`
     # will keep proposing it and spend the turn being told no.
     if policy.mode is Mode.READ_ONLY:
-        chosen = [
-            t for t in chosen
-            if t.name not in {'write_file', 'edit_file', 'multi_edit', 'apply_patch'}
-        ]
+        chosen = [t for t in chosen if t.name not in FILE_WRITERS]
 
     # Memory is added as tools and as a per-turn hook, and only when this
     # person has switched it on — so a model in a session without memory is
@@ -234,9 +244,54 @@ def build_session(
     if mcp is not None:
         chosen = [*chosen, *mcp_tools(mcp)]
 
+    found_skills: dict[str, Any] = {}
+    if skills:
+        from openmirror.agent import skills as skills_mod
+        from openmirror.agent.tools.skill import SkillTool
+
+        found_skills = skills_mod.discover(root_path, home=home)
+        # The tool only when there is something for the model to load. A
+        # person-only skill still runs from `/name` without it.
+        if any(s.model_invocable for s in found_skills.values()):
+            chosen = [*chosen, SkillTool(found_skills)]
+
+    after_write: list[Any] = []
+    if lsp:
+        from openmirror.agent.lsp import LspPool
+        from openmirror.agent.tools.lsp import LspTool
+
+        pool = LspPool(root_path, list(lsp))
+        chosen = [*chosen, LspTool(pool)]
+        after_write.append(pool.after_write)
+
+    # Narrowed after everything has been added, so a group name means the
+    # same thing whichever capabilities happen to be attached.
+    allowed = resolve_toolset(toolset or [])
+    if allowed is not None:
+        chosen = [t for t in chosen if t.name in allowed]
+
+    # Agents last, because which kinds are worth offering depends on the tools
+    # they would be given — and those are the ones that survived narrowing.
+    kinds: dict[str, Any] = {}
+    if agents and (allowed is None or 'agent' in allowed):
+        from openmirror.agent import agents as agents_mod
+        from openmirror.agent.tools.agent import AgentTool
+
+        kinds = agents_mod.offered(agents_mod.load(root_path, home=home), {t.name: t for t in chosen})
+        if kinds:
+            chosen = [*chosen, AgentTool(kinds)]
+
+    # The way out of plan mode belongs to the mode, not to a toolset: a
+    # session narrowed to its files can still be switched to planning, and a
+    # plan nobody can approve is a session stuck reading for ever. It is only
+    # shown to the model while the session is planning.
+    if not any(t.name == 'propose_plan' for t in chosen):
+        chosen = [*chosen, ProposePlanTool()]
+
     # What this session actually has, for the prompt. Derived from the tools
     # that ended up on it rather than from the arguments, so a capability that
-    # was asked for and could not be built is not claimed.
+    # was asked for and could not be built — or was narrowed away — is not
+    # claimed.
     names = {t.name for t in chosen}
     capabilities = [
         name for name, marker in (
@@ -245,19 +300,16 @@ def build_session(
             ('media', 'generate_image'),
             ('system', 'system_info'),
             ('memory', 'recall'),
+            ('todo', 'todo'),
+            ('agents', 'agent'),
+            ('skills', 'skill'),
+            ('lsp', 'lsp'),
         )
         if marker in names
     ]
 
-    # Narrowed last, after everything has been added, so a group name means
-    # the same thing whichever capabilities happen to be attached.
-    allowed = resolve_toolset(toolset or [])
-    if allowed is not None:
-        chosen = [t for t in chosen if t.name in allowed]
-
-    context = prompt_mod.project_context(root_path)
-    if extra_prompt:
-        context = f'{context}\n\n{extra_prompt}' if context else extra_prompt
+    project = prompt_mod.project_context(root_path)
+    context = f'{project}\n\n{extra_prompt}' if project and extra_prompt else (project or extra_prompt)
 
     return AgentSession(
         session_id=session_id,
@@ -281,4 +333,9 @@ def build_session(
         browser=browser,
         checkpoints=checkpoints,
         stage=stage,
+        agent_kinds=kinds,
+        skills=found_skills,
+        compact_at=compact_at,
+        after_write=after_write,
+        project_context=project,
     )

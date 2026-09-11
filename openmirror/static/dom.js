@@ -99,7 +99,9 @@ export function socket(path, params = {}) {
 }
 
 export function took(ms) {
-  if (ms < 1000) return `${ms}ms`;
+  // Rounded: a /command that answers at once takes a few microseconds, and
+  // the raw figure printed as "0.0000419464111328ms".
+  if (ms < 1000) return `${Math.round(ms)}ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
   const mins = Math.floor(ms / 60000);
   return `${mins}m ${Math.round((ms % 60000) / 1000)}s`;

@@ -8,6 +8,7 @@ whether a model happened to feel cooperative that morning.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import tempfile
 from pathlib import Path
 
@@ -35,7 +36,10 @@ class ScriptedProvider:
         self.seen: list[ChatRequest] = []
 
     async def stream(self, req: ChatRequest):
-        self.seen.append(req)
+        # A copy of the list, not the list: the session goes on appending to
+        # its own, and a request kept by reference would appear to contain
+        # replies that came after it was sent.
+        self.seen.append(dataclasses.replace(req, messages=list(req.messages)))
         events = self.script[min(self.calls, len(self.script) - 1)]
         self.calls += 1
         for event in events:
@@ -56,6 +60,42 @@ async def drain(session, until=TurnCompleted, timeout=10):  # noqa: ASYNC109 - t
                 return
 
     await asyncio.wait_for(pump(), timeout=timeout)
+    return out
+
+
+async def idle(session, timeout=10):  # noqa: ASYNC109 - test helper
+    """Wait for the task holding a turn to finish, not just for its last event.
+
+    `turn.completed` is emitted a moment before the task ends, and a submit
+    into that gap is refused — which is what a client's disabled send button
+    is waiting out too.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while session.busy and loop.time() < deadline:  # noqa: ASYNC110 - polling a flag, as a client does
+        await asyncio.sleep(0.01)
+
+
+async def turn(session, text, *, on=None, timeout=20):  # noqa: ASYNC109 - test helper
+    """Submit one message and collect that turn's events, and only that turn's.
+
+    `drain` replays the whole log, so on a second turn it would return at the
+    first turn's end. This starts from wherever the session is now.
+    """
+    since = session.seq
+    session.submit(text)
+    out = []
+
+    async def pump():
+        async for event in session.events(since=since):
+            out.append(event)
+            if on is not None:
+                on(event)
+            if isinstance(event, TurnCompleted):
+                return
+
+    await asyncio.wait_for(pump(), timeout=timeout)
+    await idle(session)
     return out
 
 
@@ -350,6 +390,40 @@ async def test_a_secret_is_confirmed_and_never_printed():
     policy = ApprovalPolicy(mode=Mode.TRUSTED)
     policy.remember(call)
     assert policy.decide(call)[0] is Decision.ASK
+
+
+@pytest.mark.asyncio
+async def test_a_silent_reply_is_nudged_once_rather_than_ending_the_turn():
+    """Measured on gemma4:12b: after a tool result it sometimes replies with
+    nothing at all, and the turn used to end right there with the work undone."""
+    with tempfile.TemporaryDirectory() as tmp:
+        (Path(tmp) / 'a.txt').write_text('a\n')
+        provider = ScriptedProvider([
+            [StreamToolUse(id='c1', name='read_file', input={'path': 'a.txt'}), StreamDone(stop_reason='tool_use')],
+            [StreamDone()],
+            [StreamText(text='Done now.'), StreamDone()],
+        ])
+        session = build_session(root=Path(tmp), provider=provider, model='x', mode=Mode.ASK)
+        await session.start()
+        events = await turn(session, 'read it')
+
+    assert provider.calls == 3, 'the silent reply should have been followed by one more request'
+    last = provider.seen[-1].messages[-1]
+    assert last.role == 'user' and 'without saying anything' in last.content[-1].text
+    assert [e for e in events if isinstance(e, TurnCompleted)][0].stop_reason == 'end_turn'
+
+
+@pytest.mark.asyncio
+async def test_a_second_silence_is_taken_as_the_end():
+    with tempfile.TemporaryDirectory() as tmp:
+        provider = ScriptedProvider([
+            [StreamToolUse(id='c1', name='list_dir', input={}), StreamDone(stop_reason='tool_use')],
+            [StreamDone()],
+        ])
+        session = build_session(root=Path(tmp), provider=provider, model='x', mode=Mode.ASK)
+        await session.start()
+        await turn(session, 'list it')
+    assert provider.calls == 3, 'nudged once, then taken at its word'
 
 
 @pytest.mark.asyncio

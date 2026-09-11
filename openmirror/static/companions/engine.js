@@ -61,7 +61,7 @@ const TOOL_STATES = {
   read_file: 'reading',
   read_files: 'reading',
   outline: 'reading',
-  plan: 'thinking',
+  todo: 'thinking',
   list_dir: 'reading',
   glob: 'reading',
   grep: 'reading',
@@ -70,8 +70,18 @@ const TOOL_STATES = {
   edit_file: 'writing',
   multi_edit: 'writing',
   apply_patch: 'writing',
+  notebook_edit: 'writing',
   remember: 'writing',
   shell: 'running',
+  tasks: 'reading',
+  // Asking a language server, loading a skill: looking something up.
+  lsp: 'reading',
+  skill: 'reading',
+  // While a subagent works, this one is waiting on it — which from outside
+  // looks like thinking, and the subagent's own steps move the creature too.
+  agent: 'thinking',
+  // A plan put to the person is a question, and it waits like one.
+  propose_plan: 'waiting',
   web_search: 'browsing',
   web_fetch: 'browsing',
   research: 'browsing',

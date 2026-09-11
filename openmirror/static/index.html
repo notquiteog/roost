@@ -137,8 +137,20 @@
   </div>
 
   <form id="composer">
+    <!-- What stays in view while the transcript scrolls: where the agent is in
+         its to-do list, and anything it has left running. Both hidden until
+         there is something in them. -->
+    <div id="todo-panel" hidden>
+      <button id="todo-head" type="button" aria-expanded="true" aria-controls="todo-list">
+        <span id="todo-title">To-do</span><span id="todo-count" class="meta"></span><span class="chev">›</span>
+      </button>
+      <ol id="todo-list" class="todos"></ol>
+    </div>
+    <div id="tasks-strip" aria-label="Running in the background" hidden></div>
+
     <div id="field">
-      <textarea id="input" rows="1" placeholder="Ask it to do something…  (Enter to send, Shift+Enter for a newline)" disabled></textarea>
+      <ul id="slash" role="listbox" aria-label="Commands and skills" hidden></ul>
+      <textarea id="input" rows="1" placeholder="Ask it to do something, or / for commands and skills…  (Enter to send, Shift+Enter for a newline)" disabled></textarea>
       <div id="controls">
         <!-- The buddy, at thumbnail size, saying what it is doing in words.
              Same state as the perch, close enough to the caret to catch. -->
@@ -150,6 +162,7 @@
           <svg class="ic"><use href="#i-shield"></use></svg>
           <select id="mode">
             <option value="read_only">read only</option>
+            <option value="plan">plan first</option>
             <option value="ask">ask first</option>
             <option value="auto_edit">auto edit</option>
             <option value="trusted">trusted</option>
@@ -244,6 +257,7 @@
       <div class="watch-controls">
         <label class="chip">Approval
           <select id="watch-mode">
+            <option value="plan">plan first</option>
             <option value="ask">ask first</option>
             <option value="auto_edit">auto edit</option>
             <option value="trusted" selected>trusted</option>
@@ -402,10 +416,10 @@
     <label>Tools
       <select name="tools">
         <option value="">everything it has</option>
-        <option value="files,shell,plan,web">code — files, commands, the web</option>
+        <option value="files,shell,todo,web,agents,skills">code — files, commands, the web</option>
         <option value="browser,web">the web — a real browser, search, research</option>
         <option value="browser,desktop">the screen — browser and desktop control</option>
-        <option value="files,plan">files only — no commands, no network</option>
+        <option value="files,todo">files only — no commands, no network</option>
         <option value="media">making things — images and video</option>
         <option value="system,shell">the machine — install software, system settings</option>
       </select>
@@ -418,6 +432,7 @@
     <label>Approval
       <select name="mode">
         <option value="read_only">read only — nothing that changes anything</option>
+        <option value="plan">plan — it looks around, then shows you a plan before changing anything</option>
         <option value="ask" selected>ask — reads run, everything else is confirmed</option>
         <option value="auto_edit">auto edit — reads and file writes run</option>
         <option value="trusted">trusted — commands run too</option>

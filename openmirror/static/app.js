@@ -57,6 +57,12 @@ const state = {
   // The same counted across the whole session, for the bar.
   added: 0,
   removed: 0,
+  // The latest to-do list the session's own agent wrote.
+  todos: [],
+  // Background work, by task id, as the server last described it.
+  tasks: new Map(),
+  // What `/` can be followed by in the open session, for the menu.
+  commands: [],
 };
 
 /* ---------------------------------------------------------------- transcript */
@@ -82,7 +88,7 @@ function append(node) {
    question above the box, and a few things you might ask. The moment there is
    anything to read, all of that goes and the transcript takes the room. */
 function settle() {
-  const empty = !transcript.querySelector('.turn, .tool, .question, .notice, .changed, .worked');
+  const empty = !transcript.querySelector('.turn, .tool, .question, .notice, .changed, .worked, .compacted');
   document.body.classList.toggle('blank', empty);
   $('#hero').hidden = !empty;
   $('#starters').hidden = !empty;
@@ -257,7 +263,13 @@ const VERBS = {
   edit_file: 'Edited',
   multi_edit: 'Edited',
   apply_patch: 'Patched',
-  plan: 'Planned',
+  notebook_edit: 'Edited',
+  todo: 'Updated the to-dos',
+  propose_plan: 'Proposed a plan',
+  agent: 'Delegated',
+  skill: 'Used the skill',
+  lsp: 'Asked the language server',
+  tasks: 'Background',
   remember: 'Remembered',
   shell: 'Ran',
   web_search: 'Searched the web for',
@@ -298,7 +310,9 @@ function setCard(card, on) {
   card.classList.toggle('open', on);
 }
 
-function toolCard(call, needsApproval) {
+/* `host` is where the card goes: the transcript, or — for a subagent's call —
+   the log inside the card of the call that started it. */
+function toolCard(call, needsApproval, host = null) {
   const card = el('div', 'tool');
   const head = el('div', 'head');
 
@@ -318,7 +332,8 @@ function toolCard(call, needsApproval) {
     else card.classList.toggle('card', card.classList.contains('failed') || Boolean(card.querySelector('.decide')));
   };
   card.appendChild(head);
-  append(card);
+  if (host) host.appendChild(card);
+  else append(card);
   state.tools.set(call.id, card);
 
   if (needsApproval) {
@@ -450,7 +465,12 @@ function toolDone(result) {
   }
 
   const diff = result.display && result.display.diff;
-  if (diff) {
+  const items = result.name === 'todo' && result.ok && result.display ? result.display.items : null;
+  if (items) {
+    // The list itself, not the text the model was sent: a checklist reads at
+    // a glance, and "[x] [~] [ ]" is notation.
+    card.appendChild(fillTodos(el('ol', 'out todos'), items));
+  } else if (diff) {
     card.appendChild(renderDiff(diff));
     if (result.ok && result.display.path) noteChange(result.display.path, diff);
   } else if (!live && !shot && result.content) {
@@ -461,6 +481,13 @@ function toolDone(result) {
 
   if (result.name === 'desktop_click' && result.display && result.ok) {
     markClick(card, result.display.x, result.display.y, result.display.label);
+  }
+
+  // A delegation folds to one line saying how much work was inside it; the
+  // agent's own steps and its report are under the chevron.
+  if (result.name === 'agent' && result.display && result.display.tool_calls !== undefined) {
+    const n = result.display.tool_calls;
+    card.querySelector('.summary').textContent += `  ·  ${n} tool call${n === 1 ? '' : 's'}`;
   }
 
   // Anything that failed, changed a file, or has a picture in it stays a card
@@ -525,7 +552,7 @@ async function undoLast(button) {
   button.disabled = false;
 }
 
-function questionCard(ev) {
+function questionCard(ev, host = null) {
   const card = el('div', 'question');
   card.appendChild(el('div', 'q', ev.question));
 
@@ -558,7 +585,251 @@ function questionCard(ev) {
   form.appendChild(input);
   form.appendChild(go);
   card.appendChild(form);
-  append(card);
+  if (host) host.appendChild(card);
+  else append(card);
+  input.focus();
+}
+
+function denied(ev) {
+  const card = state.tools.get(ev.call_id);
+  if (!card) return;
+  card.classList.add('denied');
+  card.querySelector('.decide')?.remove();
+  card.appendChild(el('div', 'out', `Not run: ${ev.reason}`));
+}
+
+/* ------------------------------------------------------------------ agents */
+
+/* A subagent's events arrive on the same socket as everything else, marked
+   with the call that started it, and they nest inside that call's card. The
+   delegation is one line in the transcript; what the agent did is inside it
+   for anyone who wants to look — and it opens by itself when the agent needs
+   you, because a question inside a folded card is a question nobody sees. */
+function agentLog(callId) {
+  const card = state.tools.get(callId);
+  if (!card) return null;
+  let log = card.querySelector(':scope > .agent-log');
+  if (!log) {
+    log = el('div', 'agent-log');
+    // Above the report, which arrives last and belongs at the bottom.
+    card.insertBefore(log, card.querySelector(':scope > .out'));
+  }
+  return log;
+}
+
+function childEvent(ev) {
+  const log = agentLog(ev.agent);
+  if (!log) return;
+  const card = state.tools.get(ev.agent);
+
+  switch (ev.type) {
+    case 'text.delta': {
+      let said = log.lastElementChild;
+      if (!said || !said.classList.contains('said')) said = log.appendChild(el('div', 'said'));
+      said.textContent += ev.text;
+      break;
+    }
+    case 'tool.proposed':
+      toolCard(ev.call, ev.needs_approval, log);
+      if (ev.needs_approval) {
+        setCard(card, true);
+        card.scrollIntoView({ block: 'nearest' });
+        companion.set('waiting');
+      }
+      break;
+    case 'tool.output.delta':
+      toolOutput(ev.call_id, ev.text, ev.stream);
+      break;
+    case 'tool.completed':
+      toolDone(ev.result);
+      break;
+    case 'tool.denied':
+      denied(ev);
+      break;
+    case 'question.asked':
+      questionCard(ev, log);
+      setCard(card, true);
+      companion.set('waiting');
+      break;
+    case 'error':
+      log.appendChild(el('div', 'notice error', ev.message));
+      break;
+  }
+}
+
+/* ------------------------------------------------------------------ to-dos */
+
+/* The to-do list, pinned above the composer: the one thing that stays in view
+   while the transcript scrolls, because "which step is it on?" is the question
+   someone watching a long turn keeps asking. The latest list wins, and a list
+   with nothing left on it folds down to its title. */
+const TODO_MARKS = { todo: '○', doing: '◐', done: '●', dropped: '⊘' };
+
+function fillTodos(list, items) {
+  list.textContent = '';
+  for (const item of items || []) {
+    const li = el('li', item.state);
+    li.appendChild(el('span', 'mark', TODO_MARKS[item.state] || '○'));
+    li.appendChild(el('span', 'text', item.text));
+    list.appendChild(li);
+  }
+  return list;
+}
+
+function showTodos(items) {
+  state.todos = items || [];
+  const panel = $('#todo-panel');
+  if (!state.todos.length) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const done = state.todos.filter((i) => i.state === 'done').length;
+  const left = state.todos.filter((i) => i.state === 'todo' || i.state === 'doing').length;
+  const doing = state.todos.find((i) => i.state === 'doing');
+  $('#todo-title').textContent = doing ? doing.text : left ? 'To-do' : 'All done';
+  $('#todo-count').textContent = `${done} of ${state.todos.length} done`;
+  fillTodos($('#todo-list'), state.todos);
+  if (!left) foldTodos(true);
+}
+
+function foldTodos(folded) {
+  $('#todo-head').setAttribute('aria-expanded', String(!folded));
+  $('#todo-list').hidden = folded;
+}
+
+/* ------------------------------------------------------------- background */
+
+/* Work left running — a dev server, a watcher, an agent sent off — as one chip
+   each, with the one control that matters. A server you cannot see is a port
+   held until somebody goes looking for it. */
+function taskEnded(task) {
+  const what = task.kind === 'agent' ? 'Background agent' : 'Background command';
+  if (task.status === 'stopped') return `${what} ${task.id} was stopped: ${task.label}`;
+  if (task.kind === 'shell') return `${what} ${task.id} exited with code ${task.exit_code}: ${task.label}`;
+  return `${what} ${task.id} ${task.status === 'done' ? 'finished' : 'failed'}: ${task.label}`;
+}
+
+function taskUpdated(task) {
+  const known = state.tasks.get(task.id);
+  state.tasks.set(task.id, task);
+  if (task.status !== 'running' && known && known.status === 'running') {
+    notice(taskEnded(task), task.status === 'failed' ? 'error' : '');
+  }
+  showTasks();
+}
+
+function showTasks() {
+  const strip = $('#tasks-strip');
+  strip.textContent = '';
+  const running = [...state.tasks.values()].filter((t) => t.status === 'running');
+  strip.hidden = !running.length;
+  for (const task of running) {
+    const chip = el('span', 'task-chip');
+    chip.appendChild(el('span', 'dot'));
+    chip.appendChild(el('span', 'id', task.id));
+    const label = el('span', 'label', task.label);
+    label.title = task.label;
+    chip.appendChild(label);
+    const stop = el('button', 'ghost tiny', 'Stop');
+    stop.type = 'button';
+    stop.title = `Stop ${task.id}`;
+    stop.onclick = () => {
+      stop.disabled = true;
+      send({ type: 'task.stop', task_id: task.id });
+    };
+    chip.appendChild(stop);
+    strip.appendChild(chip);
+  }
+}
+
+/* Where the conversation was summarised to make room, or cleared. Said in the
+   transcript because it changes what the agent knows without anything else
+   visibly happening — after it, the model has the summary and not the words. */
+function compactedNote(ev) {
+  const box = el('div', 'compacted');
+  if (ev.reason === 'cleared') {
+    box.appendChild(el('span', '', 'Conversation cleared — the agent starts afresh from here.'));
+    showTodos([]);
+  } else {
+    const details = el('details');
+    const how = ev.reason === 'automatic' ? 'Compacted to make room' : 'Compacted';
+    const size = ev.tokens_before ? `, about ${Math.max(1, Math.round(ev.tokens_before / 1000))}k tokens` : '';
+    details.appendChild(el('summary', '', `${how}: ${ev.messages_before} messages${size}, now a summary`));
+    details.appendChild(el('div', 'body', ev.summary));
+    box.appendChild(details);
+  }
+  append(box);
+}
+
+/* ------------------------------------------------------------------ slash */
+
+/* `/` at the start of the box opens the session's commands and skills,
+   filtered as you type. A menu rather than a help page, because the only
+   moment anybody wants the list is the moment they have typed the slash. */
+const slash = { items: [], at: 0 };
+
+async function loadCommands(id) {
+  state.commands = [];
+  const res = await api(`/api/sessions/${id}/commands`);
+  if (!res || !res.ok || state.sessionId !== id) return;
+  state.commands = (await res.json()).commands || [];
+}
+
+function slashQuery() {
+  // Only while the name is being typed: once there is a space, what follows
+  // is the command's arguments and the menu has nothing left to offer.
+  const match = /^\/([\w:-]*)$/.exec($('#input').value);
+  return match ? match[1].toLowerCase() : null;
+}
+
+function showSlash() {
+  const query = slashQuery();
+  if (query === null || !state.commands.length) {
+    hideSlash();
+    return;
+  }
+  const starts = state.commands.filter((c) => c.name.startsWith(query));
+  const inside = state.commands.filter((c) => !c.name.startsWith(query) && c.name.includes(query));
+  slash.items = [...starts, ...inside].slice(0, 8);
+  if (!slash.items.length) {
+    hideSlash();
+    return;
+  }
+  slash.at = Math.min(slash.at, slash.items.length - 1);
+
+  const menu = $('#slash');
+  menu.textContent = '';
+  slash.items.forEach((item, i) => {
+    const li = el('li');
+    li.setAttribute('role', 'option');
+    li.setAttribute('aria-selected', String(i === slash.at));
+    li.appendChild(el('span', 'name', `/${item.name}`));
+    if (item.hint) li.appendChild(el('span', 'hint', item.hint));
+    li.appendChild(el('span', 'desc', item.description));
+    li.appendChild(el('span', 'kind', item.kind));
+    // mousedown rather than click, so the box keeps its focus and caret.
+    li.onmousedown = (e) => {
+      e.preventDefault();
+      pickSlash(i);
+    };
+    menu.appendChild(li);
+  });
+  menu.hidden = false;
+}
+
+function hideSlash() {
+  $('#slash').hidden = true;
+  slash.items = [];
+  slash.at = 0;
+}
+
+function pickSlash(i) {
+  const item = slash.items[i];
+  if (!item) return;
+  const input = $('#input');
+  input.value = `/${item.name} `;
+  hideSlash();
   input.focus();
 }
 
@@ -662,6 +933,13 @@ function handleAgentEvent(ev) {
   // of one event stream is two places for the sequence number to drift.
   narrate(ev);
 
+  if (ev.agent) {
+    // A subagent's, which nests inside the call that started it.
+    childEvent(ev);
+    if (typeof ev.seq === 'number' && ev.seq > state.seq) state.seq = ev.seq;
+    return;
+  }
+
   switch (ev.type) {
     case 'session.started':
       // The promise, spelled out, once: what this session may do without
@@ -706,13 +984,17 @@ function handleAgentEvent(ev) {
       appendThinking(ev.text);
       break;
 
-    case 'tool.proposed':
+    case 'tool.proposed': {
       state.turnNode = null;
-      toolCard(ev.call, ev.needs_approval);
+      const card = toolCard(ev.call, ev.needs_approval);
+      // Open while it works, so its steps are visible as they happen; it
+      // folds to a line when it reports back.
+      if (ev.call.name === 'agent') setCard(card, true);
       // What it is about to do, or the fact that it cannot do it without you.
       if (ev.needs_approval) companion.set('waiting');
       else companion.tool(ev.call.name);
       break;
+    }
 
     case 'tool.output.delta':
       toolOutput(ev.call_id, ev.text, ev.stream);
@@ -720,20 +1002,23 @@ function handleAgentEvent(ev) {
 
     case 'tool.completed':
       toolDone(ev.result);
+      if (ev.result.name === 'todo' && ev.result.ok && ev.result.display) showTodos(ev.result.display.items);
       if (ev.result.ok) companion.set('thinking');
       else companion.flash('error');
       break;
 
-    case 'tool.denied': {
-      const card = state.tools.get(ev.call_id);
-      if (card) {
-        card.classList.add('denied');
-        card.querySelector('.decide')?.remove();
-        card.appendChild(el('div', 'out', `Not run: ${ev.reason}`));
-      }
+    case 'tool.denied':
+      denied(ev);
       companion.set('thinking');
       break;
-    }
+
+    case 'task.updated':
+      taskUpdated(ev.task);
+      break;
+
+    case 'context.compacted':
+      compactedNote(ev);
+      break;
 
     case 'question.asked':
       state.turnNode = null;
@@ -1379,6 +1664,13 @@ function selectSession(id) {
   showDiffstat();
   // Held commands belong to the session they were typed for, not the next one.
   state.outbox = [];
+  // As do its to-dos, its background work and what `/` offers in it. The
+  // first two come back with the replay; the commands are asked for.
+  showTodos([]);
+  state.tasks = new Map();
+  showTasks();
+  hideSlash();
+  loadCommands(id);
   rememberSession(id);
   connectAgent(id);
   loadSessions();
@@ -1416,14 +1708,42 @@ function wire() {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px';
     companion.typing();
+    showSlash();
   });
 
   input.addEventListener('keydown', (e) => {
+    if (!$('#slash').hidden) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        slash.at = (slash.at + step + slash.items.length) % slash.items.length;
+        showSlash();
+        return;
+      }
+      // Enter completes a name that is not finished yet, and sends one that
+      // is: typing "/compact" in full and pressing Enter should run it.
+      const chosen = slash.items[slash.at];
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && chosen && slashQuery() !== chosen.name)) {
+        e.preventDefault();
+        pickSlash(slash.at);
+        return;
+      }
+      if (e.key === 'Escape') {
+        // Closing the menu, not stopping the turn: the document-level
+        // Escape is for that, and this one is closer to hand.
+        e.preventDefault();
+        e.stopPropagation();
+        hideSlash();
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       $('#composer').requestSubmit();
     }
   });
+
+  $('#todo-head').onclick = () => foldTodos($('#todo-head').getAttribute('aria-expanded') === 'true');
 
   $('#composer').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -1433,6 +1753,7 @@ function wire() {
     // replaces it, so live and replayed conversations render identically.
     state.echo = userTurn(text);
     send({ type: 'turn.submit', text });
+    hideSlash();
     input.value = '';
     input.style.height = 'auto';
   });

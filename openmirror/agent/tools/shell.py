@@ -316,6 +316,14 @@ class ShellTool(Tool):
                 'type': 'integer',
                 'description': 'Seconds before the command is killed. Default 120, maximum 1800.',
             },
+            'background': {
+                'type': 'boolean',
+                'description': (
+                    'Start it and return at once, for something that keeps running — a dev server, '
+                    'a watcher, a long build. Read what it prints with the tasks tool; you are told '
+                    'when it finishes.'
+                ),
+            },
         },
         'required': ['command'],
     }
@@ -343,7 +351,13 @@ class ShellTool(Tool):
 
         # One line, the command itself first, because that is what a person
         # reads. The reason follows for the cases where it is not obvious.
+        #
+        # Backgrounding changes nothing about the grade: a command is as
+        # dangerous left running as waited for, and more so unwatched.
         shown = command if len(command) <= 120 else command[:117] + '...'
+        if args.get('background'):
+            why = f'{why}; left running in the background' if risk is not Risk.READ else 'left running in the background'
+            return Assessment(risk=risk, summary=f'{shown}   ({why})')
         return Assessment(risk=risk, summary=shown if risk is Risk.READ else f'{shown}   ({why})')
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
@@ -353,6 +367,20 @@ class ShellTool(Tool):
         cwd = resolve_in_root(args['cwd'], ctx) if args.get('cwd') else ctx.cwd
         if not cwd.is_dir():
             raise ToolError(f'{cwd}: not a directory')
+
+        if args.get('background'):
+            if ctx.tasks is None:
+                raise ToolError(
+                    'nothing can be left running from here — run it in the foreground, with a timeout'
+                )
+            task = await ctx.tasks.start_shell(command, cwd, {**os.environ, **ctx.env})
+            return Output(
+                content=(
+                    f'Started in the background as {task.id}, and still running. Read what it prints '
+                    f'with tasks (action "output", id "{task.id}"); you will be told when it finishes.'
+                ),
+                display={'command': command, 'cwd': str(cwd), 'background': True, 'task': task.id},
+            )
 
         timeout = min(int(args.get('timeout') or self.default_timeout), 1800)
 

@@ -108,6 +108,14 @@ class _Event(BaseModel):
     # it saw and is replayed the gap, so this is the only thing making a
     # detach cheap rather than a full replay.
     seq: int = 0
+    # Which agent in the session said this. Empty for the session's own; a
+    # subagent's events carry the id of the `agent` call that started it, so a
+    # client can nest them under that call — and a replay, being the same
+    # events in the same order, rebuilds the same nesting. One log per session
+    # rather than one per agent, because approvals from a subagent are
+    # approvals in this session, and a second stream is a second place to miss
+    # one.
+    agent: str = ''
 
 
 class SessionStarted(_Event):
@@ -227,13 +235,47 @@ class PolicyChanged(_Event):
     policy: str = ''
 
 
+class TaskUpdated(_Event):
+    """Background work changed state: it started, finished, failed or was stopped.
+
+    A background task outlives the call that started it, so that call's
+    result cannot say how it ended. This is the only place that does.
+    """
+
+    type: Literal['task.updated'] = 'task.updated'
+    # id, kind (shell or agent), label, status, exit_code, started, ended —
+    # and for an agent, the call id its own events carry.
+    task: dict[str, Any] = Field(default_factory=dict)
+
+
+class ContextCompacted(_Event):
+    """The conversation so far was replaced by a summary of it, or cleared.
+
+    Worth an event of its own because it changes what the agent knows without
+    anything else visibly happening: after it, the model has the summary and
+    not the transcript, and a client that shows neither fact leaves someone
+    wondering why it forgot the exact wording of a file it read an hour ago.
+    """
+
+    type: Literal['context.compacted'] = 'context.compacted'
+    turn_id: str | None = None
+    reason: Literal['manual', 'automatic', 'cleared'] = 'manual'
+    messages_before: int = 0
+    messages_after: int = 0
+    # Estimated, not counted: a count needs the provider's tokenizer, and the
+    # point is the order of magnitude.
+    tokens_before: int = 0
+    # Empty when the conversation was cleared rather than summarised.
+    summary: str = ''
+
+
 class SessionEnded(_Event):
     type: Literal['session.ended'] = 'session.ended'
     reason: str = 'closed'
 
 
 AgentEvent = Annotated[
-    SessionStarted | TurnStarted | TextDelta | ThinkingDelta | ToolProposed | ToolStarted | ToolOutputDelta | ToolCompleted | ToolDenied | QuestionAsked | TurnCompleted | PolicyChanged | AgentError | SessionEnded,
+    SessionStarted | TurnStarted | TextDelta | ThinkingDelta | ToolProposed | ToolStarted | ToolOutputDelta | ToolCompleted | ToolDenied | QuestionAsked | TurnCompleted | PolicyChanged | TaskUpdated | ContextCompacted | AgentError | SessionEnded,
     Field(discriminator='type'),
 ]
 
@@ -292,11 +334,23 @@ class SetPolicy(BaseModel):
     mode: str
 
 
+class StopTask(BaseModel):
+    """Stop one piece of background work — a dev server, a subagent.
+
+    Separate from `turn.interrupt`, which deliberately leaves background work
+    running: stopping the model is not a request to stop the server it
+    started.
+    """
+
+    type: Literal['task.stop'] = 'task.stop'
+    task_id: str
+
+
 class CloseSession(BaseModel):
     type: Literal['session.close'] = 'session.close'
 
 
 ClientCommand = Annotated[
-    SubmitTurn | ApproveTool | DenyTool | AnswerQuestion | Interrupt | SetPolicy | CloseSession,
+    SubmitTurn | ApproveTool | DenyTool | AnswerQuestion | Interrupt | SetPolicy | StopTask | CloseSession,
     Field(discriminator='type'),
 ]

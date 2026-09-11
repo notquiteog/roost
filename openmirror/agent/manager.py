@@ -109,6 +109,15 @@ class SessionManager:
                 Path(cfg.memory_db).parent / 'checkpoints' / (session_id or 'session')
             )
 
+        # Which language servers this machine has. Looked up per session
+        # rather than once, so installing one does not need a restart to be
+        # noticed; it is a handful of PATH lookups.
+        lsp = None
+        if cfg.lsp_enabled:
+            from openmirror.agent.lsp import find_servers
+
+            lsp = find_servers(cfg.lsp_config) or None
+
         session = build_session(
             root=root, provider=provider, model=model, mode=mode, session_id=session_id,
             title=title or Path(root).name, memory=memory, user_id=user_id,
@@ -123,6 +132,11 @@ class SessionManager:
             media=media,
             system=cfg.system_tools_enabled,
             toolset=toolset,
+            agents=cfg.agents_enabled,
+            skills=cfg.skills_enabled,
+            lsp=lsp,
+            compact_at=cfg.compact_at,
+            home=Path.home(),
         )
         self._sessions[session.id] = session
         await session.start()
@@ -143,6 +157,7 @@ class SessionManager:
                 'policy': s.policy.mode.value,
                 'busy': s.busy,
                 'waiting_on': s.waiting_on,
+                'background': len(s.tasks.running) if s.tasks is not None else 0,
                 'attached': s.attached,
                 'seq': s.seq,
                 'turns': sum(1 for m in s.messages if m.role == 'user'),

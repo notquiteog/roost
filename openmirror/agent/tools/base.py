@@ -70,6 +70,25 @@ class ToolContext:
     # Set for tools that need to reach a model of their own.
     user_routes: Any = None
     env: dict[str, str] = field(default_factory=dict)
+    # Background work this session is running: shell commands started with
+    # `background`, and agents sent off the same way. None for a subagent,
+    # which has nothing of its own to leave running when it reports back.
+    tasks: Any = None
+    # Starts a subagent, as `spawn(kind, task, title, background)`. Provided by
+    # the session because a subagent *is* a session — one that reports to
+    # this one, through this one's approvals.
+    spawn: Any = None
+    # The approval policy, and a way to change its mode that everyone watching
+    # is told about. For the one tool whose job is changing it: propose_plan.
+    policy: Any = None
+    set_mode: Any = None
+
+
+# The tools whose whole purpose is changing files. Left out of a read-only
+# session and hidden while planning, rather than offered and refused: a model
+# that can see `write_file` will keep proposing it and spend the turn being
+# told no.
+FILE_WRITERS = frozenset({'write_file', 'edit_file', 'multi_edit', 'apply_patch', 'notebook_edit'})
 
 
 @dataclass(slots=True)
