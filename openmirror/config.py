@@ -100,9 +100,21 @@ class Config:
     # reach services never exposed to the internet — a cloud metadata endpoint,
     # or Perch's own console.
     web_allow_private: bool = field(default_factory=lambda: _bool('OPENMIRROR_WEB_ALLOW_PRIVATE'))
-    search_backend: str = field(default_factory=lambda: os.getenv('OPENMIRROR_SEARCH_BACKEND', 'duckduckgo'))
+    # `headless` by default: it is the only backend that needs no key, and the
+    # keyless HTTP one it replaced stopped working when the engines began
+    # answering automated requests with a challenge page. It costs a Chromium
+    # (the `browser` extra), which is why the keyed backends are still here and
+    # still better where a key exists.
+    search_backend: str = field(default_factory=lambda: os.getenv('OPENMIRROR_SEARCH_BACKEND', 'headless'))
     search_key: str = field(default_factory=lambda: os.getenv('OPENMIRROR_SEARCH_KEY', ''))
     search_url: str = field(default_factory=lambda: os.getenv('OPENMIRROR_SEARCH_URL', ''))
+    # Which engine the headless backend asks. `auto` walks them in order —
+    # least-tracking first — and stops at the first that answers, because an
+    # engine being blocked is the ordinary case. Naming one (startpage,
+    # duckduckgo, bing, google) uses only that one and fails loudly: somebody
+    # who chose an engine for what it does not log has not agreed to fall
+    # through to one that does. Ignored by every other backend.
+    search_engine: str = field(default_factory=lambda: os.getenv('OPENMIRROR_SEARCH_ENGINE', 'auto'))
 
     # Undo for the agent's own file edits. On by default: it is cheap, and the
     # moment you want it is always after the fact.
@@ -116,6 +128,24 @@ class Config:
         else Path.cwd() / '.mcp.json'
     )
     mcp_enabled: bool = field(default_factory=lambda: _bool('OPENMIRROR_MCP', True))
+
+    # --- openmirror AS an MCP server ------------------------------------------
+    # The other direction: another client — an editor, a desktop assistant,
+    # another agent — using this twin's memory, routing and search backend.
+    #
+    # Off, and token-gated when on. Memory is the most personal thing in the
+    # project, and the HTTP endpoint refuses to mount on a non-loopback bind
+    # with no token rather than warning about it. The stdio transport
+    # (`openmirror-mcp`) needs no token: a parent process that can spawn it
+    # already has everything it could hand over.
+    mcp_serve: bool = field(default_factory=lambda: _bool('OPENMIRROR_MCP_SERVE'))
+    mcp_serve_token: str = field(default_factory=lambda: os.getenv('OPENMIRROR_MCP_SERVE_TOKEN', ''))
+    # How much of the twin to lend out. `read` recalls, searches, fetches and
+    # researches; `write` adds remembering; `all` adds media generation, which
+    # spends money. Nothing on any scope runs a command, touches a file or
+    # drives the screen — those are the tools openmirror guards with a human, and
+    # an MCP call has no human in front of it.
+    mcp_serve_scope: str = field(default_factory=lambda: os.getenv('OPENMIRROR_MCP_SERVE_SCOPE', 'read'))
 
     # --- the desktop ------------------------------------------------------
     # Screenshotting the screen and driving the mouse and keyboard. Off by
@@ -186,6 +216,20 @@ class Config:
     # Headful is worth it for anything transactional: watching it, and being
     # able to take the mouse off it, beats the memory it costs.
     browser_headless: bool = field(default_factory=lambda: _bool('OPENMIRROR_BROWSER_HEADLESS', True))
+
+    # WHICH browser. These three are the *default*; a choice saved from the
+    # settings dialog lives in `browser.json` under the data directory and
+    # overrides them, so an install managed by a file behaves as it always did
+    # and a person who wants Chrome this afternoon does not have to edit one.
+    # See openmirror/agent/browsers.py.
+    #
+    # `browser_engine` is a Playwright engine: chromium, firefox or webkit.
+    # `browser_channel` names an installed variant (chrome, msedge, …) and is
+    # chromium-only. `browser_executable` points at a binary — a Brave or an
+    # ungoogled-chromium — and wins over a channel.
+    browser_engine: str = field(default_factory=lambda: os.getenv('OPENMIRROR_BROWSER_ENGINE', 'chromium'))
+    browser_channel: str = field(default_factory=lambda: os.getenv('OPENMIRROR_BROWSER_CHANNEL', ''))
+    browser_executable: str = field(default_factory=lambda: os.getenv('OPENMIRROR_BROWSER_BINARY', ''))
 
     # Bound to loopback by default. An agent that runs commands must not be on
     # a network interface by accident.

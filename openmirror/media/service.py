@@ -268,7 +268,11 @@ class MediaService:
             # them should have to know how this build stores files.
             clean = self._load_images(schema, clean)
 
-            size = clean.pop('size', None) or f'{clean.get("width", 1024)}x{clean.get("height", 1024)}'
+            # `size` is popped because the image contract takes it as its own
+            # argument, and remembered because whether it was *asked for* is
+            # the thing the recipe needs to know — see `_recipe`.
+            asked_size = clean.pop('size', None)
+            size = asked_size or f'{clean.get("width", 1024)}x{clean.get("height", 1024)}'
             count = int(clean.pop('n', 1) or 1)
             # Not a parameter — it is the list of LoRA names the server has,
             # sent to the form so a person can see what to type into a prompt.
@@ -289,7 +293,7 @@ class MediaService:
                 results = await impl.generate(job.prompt, model=job.model, progress=report, **clean)
             took = int((time.monotonic() - started) * 1000)
 
-            recipe = self._recipe(schema, clean, size=size, count=count, kind=job.kind)
+            recipe = self._recipe(clean, size=asked_size, count=count, kind=job.kind)
             job.media = [
                 self.store.add(
                     media.data,
@@ -341,20 +345,26 @@ class MediaService:
             job.finished_at = time.time()
 
     @staticmethod
-    def _recipe(schema: list[Param], clean: dict[str, Any], *, size: str, count: int, kind: str) -> dict[str, Any]:
+    def _recipe(clean: dict[str, Any], *, size: str | None, count: int, kind: str) -> dict[str, Any]:
         """What is worth recording about how this was made.
 
-        A recipe is read by somebody trying to get the same result again, so
-        anything in it that cannot produce that is worse than absent. Three
-        things were, and all three were visible in the panel before they were
-        fixed here:
+        **The rule is: record what was sent.** A recipe is read by somebody
+        trying to get the same result again, and anything in it that was not
+        actually a setting is worse than absent — it reads as a knob that was
+        turned, and a person changing one thing and going again starts from a
+        false picture of what the last run did.
+
+        Three things broke that rule, and all three were visible in the panel
+        before they were fixed here:
 
         **A size nobody asked for.** `generate` takes a size because the image
-        contract has always had one, and it is synthesised from the width and
-        height when a caller did not give one — so a model that sizes by
-        aspect ratio recorded `size 1024x1024`, which is not what it did and
-        not a setting it has. Recorded only when the backend actually declared
-        one of those controls.
+        contract has always had one, so it is synthesised from the width and
+        height — or, failing those, from a hard-coded 1024 — when the caller
+        gave none. That made a model which sizes by aspect ratio record
+        `size 1024x1024`: not what it did, and not a control it has. Recorded
+        only when a size was genuinely asked for; a caller who set width and
+        height has those recorded instead, which is the same fact in the units
+        that backend actually uses.
 
         **`seed -1`.** -1 is a request for a random seed, not a seed. It is the
         first thing anyone looking for reproducibility reads, and it is the one
@@ -367,13 +377,14 @@ class MediaService:
         A reference image is dropped too, but for a different reason: it is
         megabytes of picture and it is already in the store under its own id.
         """
-        recipe = {k: v for k, v in clean.items() if not isinstance(v, bytes | bytearray)}
-        recipe = {k: v for k, v in recipe.items() if not isinstance(v, list)}
+        recipe = {
+            k: v for k, v in clean.items()
+            if not isinstance(v, bytes | bytearray | list)
+        }
         if recipe.get('seed') in (-1, '-1'):
             recipe.pop('seed')
         if kind == 'image':
-            sized = {p.name for p in schema} & {'size', 'width', 'height'}
-            if sized:
+            if size:
                 recipe = {'size': size, **recipe}
             if count > 1:
                 recipe = {'n': count, **recipe}

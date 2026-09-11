@@ -94,7 +94,13 @@ def web_tools(cfg: Any) -> list[Tool]:
     from openmirror.agent.tools.web import WebFetchTool, WebSearchTool
 
     fetch = WebFetchTool(allow_private=cfg.web_allow_private)
-    search = WebSearchTool(backend=cfg.search_backend, api_key=cfg.search_key, base_url=cfg.search_url)
+    search = WebSearchTool(
+        backend=cfg.search_backend,
+        api_key=cfg.search_key,
+        base_url=cfg.search_url,
+        engine=cfg.search_engine,
+        headless=cfg.browser_headless,
+    )
     # `research` is given the other two rather than its own: one set of keys,
     # one private-address guard, and no way for the composite to reach
     # somewhere the individual tools would refuse.

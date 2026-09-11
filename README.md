@@ -36,6 +36,7 @@ one, and watching one work are different kinds of attention:
 | **Autopilot** | a goal and a live view of a screen it is driving. No chat |
 | **Studio** | images and video, with every knob the backend actually has |
 | **Search** | the agent's own search backend, without the agent |
+| **Browser** | which browser it drives — Chromium, your Chrome, Firefox, WebKit, or a path |
 
 ---
 
@@ -157,8 +158,24 @@ password — and a second session, which cannot have that profile because
 Chromium locks it, gets a fresh browser and is *told* it is signed out, so it
 reads a login wall as being logged out rather than as the site being broken.
 
+Search needs no key. The default backend drives a real browser, because that is
+the only keyless path left — the engines answer plain HTTP requests with a
+challenge page now, which is why the old scraper stopped working. It tries
+Startpage, then DuckDuckGo, then Bing, then Google, least-tracking first, and
+stops at the first that answers; name one and it uses only that one, since
+choosing an engine for what it does not log is not consent to fall through to
+one that does. A key still helps — Brave, Tavily or your own SearxNG — and
+those backends are still here and still faster.
+
 The same search backend is reachable directly, without a model in the way, for
 when you only wanted the links.
+
+**Which browser, in a dialog.** Playwright's Chromium by default; your own
+Chrome or Edge when a site wants the codecs or an ordinary-looking visitor;
+Firefox or WebKit when Blink is the thing you are trying to get away from; or a
+path to Brave or an ungoogled build. It applies to both the agent's browsing
+and to search, and a choice that cannot launch is refused when you make it
+rather than halfway through a task.
 
 **The machine itself.** "Install Steam" is not one instruction — it is
 `apt install steam-installer` on Debian, a flatpak where there is no native
@@ -248,9 +265,22 @@ On Wayland capture goes through the compositor's own screenshot tool and input
 through `/dev/uinput`, because X11 grabbers return a black image there.
 
 **Any MCP server, as tools.** Point it at a `.mcp.json` and every server in it
-becomes tools the agent can call. Servers are distrusted by default: a tool
-that declares itself read-only is still confirmed, because a server that can
-call itself harmless is a server that can opt out of the check it most needs.
+becomes tools the agent can call — local ones it spawns, and hosted ones it
+reaches over HTTP or the older SSE transport, which is the case where *not*
+running somebody else's code on your machine is the point. Resources and
+prompts come across too, resources as a fixed pair of tools rather than one per
+document. Servers are distrusted by default: a tool that declares itself
+read-only is still confirmed, because a server that can call itself harmless is
+a server that can opt out of the check it most needs.
+
+**And openmirror as an MCP server, if you want it.** The other direction: your
+editor or another agent asking *this* twin what it knows, grounded in the same
+memory the voice session uses. Off by default, token-gated, and scoped — `read`
+recalls and searches, `write` also remembers, `all` also spends money on
+images. Nothing at any scope runs a command, touches a file or drives the
+screen: those are the tools openmirror guards with a human in front of them, and
+an MCP call has no human in front of it. See
+[docs/EXTENDING.md](docs/EXTENDING.md).
 
 **Rewind.** Every turn that changes a file can be undone, including one that
 was interrupted halfway. See [docs/EXTENDING.md](docs/EXTENDING.md).

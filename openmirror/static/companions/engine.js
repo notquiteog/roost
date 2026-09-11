@@ -75,6 +75,10 @@ const TOOL_STATES = {
   web_search: 'browsing',
   web_fetch: 'browsing',
   research: 'browsing',
+  // An MCP resource is somebody else's document over a socket. That is reading
+  // from where the person is sitting, whatever the wire underneath is.
+  mcp_list_resources: 'reading',
+  mcp_read_resource: 'reading',
   browser_navigate: 'browsing',
   browser_read: 'browsing',
   browser_click: 'browsing',

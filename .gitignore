@@ -10,3 +10,10 @@ build/
 
 # Rust build output for the desktop shell (1.3 GB of it).
 desktop/src-tauri/target/
+
+# The default data directory (OPENMIRROR_DATA_DIR). Holds the memory database,
+# rewind checkpoints, generated media and the saved browser choice — one
+# person's data, none of it the project's. It was not listed here until an
+# install actually ran from the repo root and left it untracked in `git
+# status`, which is one `git add -A` away from publishing a memory store.
+data/

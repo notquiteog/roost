@@ -118,6 +118,11 @@ class BrowserConfig:
     # never handles a password.
     profile_dir: Path = field(default_factory=lambda: Path.home() / '.openmirror' / 'browser')
     headless: bool = True
+    # Which browser to launch. None means "whatever this install is set to",
+    # read at launch time rather than at construction: a session built this
+    # morning and first used this afternoon should use the browser chosen in
+    # between, not the one that was current when nobody had opened a page yet.
+    choice: Any = None
     # Headful is the honest default for anything transactional: you can watch
     # what it is doing and take the mouse off it.
     viewport: tuple[int, int] = (1280, 900)
@@ -169,12 +174,24 @@ class BrowserSession:
                 width, height = self.config.viewport
                 # A persistent context rather than launch()+new_context(): it is
                 # what keeps cookies, logins and local storage across runs.
+                # Which browser, and how to ask for it. A fork given by path
+                # is still Chromium as far as the tools are concerned — the
+                # element refs, the JS, the risk grading are all the same.
+                from openmirror.agent.browsers import current
+
+                choice = self.config.choice or current()
                 launch: dict[str, Any] = {
                     'headless': self.config.headless,
                     'viewport': {'width': width, 'height': height},
                     'user_agent': self.config.user_agent,
                     'args': ['--disable-blink-features=AutomationControlled'],
+                    **choice.launch_kwargs(),
                 }
+                if choice.engine != 'chromium':
+                    # Chromium switches are not Firefox or WebKit switches, and
+                    # Playwright passes them straight to the binary — which
+                    # refuses to start rather than ignoring them.
+                    launch.pop('args', None)
                 launch['user_data_dir'] = str(await self._profile_dir())
                 if self.config.env:
                     # Inherited and overlaid rather than replaced: a bare
@@ -194,7 +211,9 @@ class BrowserSession:
                         # reads the environment we have just edited, and being
                         # explicit costs nothing and removes a guess.
                         launch['args'] = [*launch['args'], '--ozone-platform=x11']
-                self._context = await self._pw.chromium.launch_persistent_context(**launch)
+                engine = getattr(self._pw, choice.engine)
+                log.info('browser: launching %s', choice.label())
+                self._context = await engine.launch_persistent_context(**launch)
                 self._context.set_default_timeout(self.config.timeout_ms)
 
             pages = self._context.pages

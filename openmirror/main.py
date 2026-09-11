@@ -17,6 +17,8 @@ from openmirror.providers.bootstrap import bootstrap
 from openmirror.providers.registry import registry
 from openmirror.routers import agent as agent_router
 from openmirror.routers import autopilot as autopilot_router
+from openmirror.routers import browser as browser_router
+from openmirror.routers import mcp as mcp_router
 from openmirror.routers import media as media_router
 from openmirror.routers import memory as memory_router
 from openmirror.routers import providers as providers_router
@@ -80,6 +82,30 @@ async def lifespan(app: FastAPI):
             app.state.memory_reembed = asyncio.create_task(memory_router.service.reembed())
     else:
         app.state.memory = None
+    # openmirror as an MCP server, for other clients. Built after memory and
+    # media so it shares this process's services rather than opening a second
+    # handle on the same SQLite file.
+    if config.mcp_serve:
+        loopback = config.host in ('127.0.0.1', 'localhost', '::1')
+        if not loopback and not config.mcp_serve_token:
+            # Refused rather than warned. This endpoint hands out a person's
+            # memory, and an unauthenticated one on a network interface is a
+            # different class of mistake from an unauthenticated agent endpoint.
+            log.error(
+                'OPENMIRROR_MCP_SERVE is on and this server is bound to %s, but no '
+                'OPENMIRROR_MCP_SERVE_TOKEN is set. The MCP endpoint will not be served. '
+                'Set a token, or bind to loopback.',
+                config.host,
+            )
+        else:
+            from openmirror.mcp.server import from_config
+
+            mcp_router.server = await from_config(app=app)
+            log.info(
+                'serving MCP at /mcp (scope: %s, token: %s)',
+                config.mcp_serve_scope, 'yes' if config.mcp_serve_token else 'no',
+            )
+
     log.info('workspace: %s   approval: %s', config.workspace, config.approval_mode)
     if not config.auth_token and config.host not in ('127.0.0.1', 'localhost', '::1'):
         # Worth saying loudly: this process runs commands on the machine.
@@ -101,6 +127,14 @@ async def lifespan(app: FastAPI):
     from openmirror.mcp.manager import manager as mcp_manager
 
     await mcp_manager.stop()
+    await mcp_router.shutdown()
+
+    # The shared Chromium the headless search backend keeps, if anything
+    # searched. Reaped on idle anyway; closed here so a stop does not wait for
+    # the idle timer.
+    from openmirror.agent.headless_search import shutdown as close_search_browser
+
+    await close_search_browser()
 
 
 app = FastAPI(title='openmirror', version='0.1.0', lifespan=lifespan)
@@ -112,6 +146,11 @@ app.include_router(providers_router.router)
 app.include_router(memory_router.router)
 app.include_router(media_router.router)
 app.include_router(search_router.router)
+app.include_router(browser_router.router)
+# Mounted always, and 404s until start-up decides this install serves MCP —
+# the same shape as the memory router, for the same reason: a feature that is
+# off should look absent rather than broken.
+app.include_router(mcp_router.router)
 app.include_router(realtime_router.router)
 app.include_router(autopilot_router.router)
 app.include_router(autopilot_router.http)

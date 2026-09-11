@@ -215,8 +215,16 @@ class MediaJobTool(_MediaTool):
         if job is None:
             raise ToolError(f'no such job: {args.get("job_id")!r}')
         data = job.to_json()
-        if job.state == 'running':
-            content = f'Still running, {data["elapsed"]}s in.'
+        if job.state in ('queued', 'running'):
+            # `queued` and `running` are both "not finished", and they are
+            # worth telling apart: a job that is still queued has not started
+            # costing anything yet, and a model deciding whether to wait or
+            # give up wants to know which it is. Reporting queued through the
+            # catch-all below produced "queued: no reason given", which reads
+            # as a failure.
+            said = data['note'] or ('waiting to start' if job.state == 'queued' else 'running')
+            done = f' ({round(data["progress"] * 100)}%)' if data['progress'] is not None else ''
+            content = f'Not finished — {said}{done}, {data["elapsed"]}s in.'
         elif job.state == 'done':
             urls = ', '.join(m['url'] for m in data['media'])
             content = f'Finished in {data["elapsed"]}s: {urls}'

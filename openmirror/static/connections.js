@@ -212,16 +212,15 @@ async function add(event) {
   refresh();
 }
 
-export function wireConnections(onChanged) {
-  $('#open-connections').onclick = async () => {
-    await loadCatalog();
-    await refresh();
-    $('#connections-dialog').showModal();
-  };
-  $('#conn-close').onclick = () => {
-    $('#connections-dialog').close();
-    if (onChanged) onChanged();
-  };
+/* Fill the panel in. Exported rather than bound to a button of its own,
+   because connections live in a tab of the settings dialog now: what opens
+   them is that dialog, and this is what it calls when the tab is shown. */
+export async function openConnections() {
+  await loadCatalog();
+  await refresh();
+}
+
+export function wireConnections() {
   $('#conn-host').onchange = fillHost;
   $('#conn-add').onsubmit = add;
 }

@@ -23,6 +23,8 @@
   <symbol id="i-wave" viewBox="0 0 16 16"><path d="M2 8h1.5"/><path d="M5 5.5v5"/><path d="M7.5 3v10"/><path d="M10 5.5v5"/><path d="M12.5 6.8v2.4"/><path d="M14.5 8H14"/></symbol>
   <symbol id="i-bolt" viewBox="0 0 16 16"><path d="M8.8 2 4 9h3.4l-.6 5L12 7H8.4z"/></symbol>
   <symbol id="i-screen" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="8.5" rx="1.5"/><path d="M6 13.5h4"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M14.2 8h-1.6M3.4 8H1.8M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1M12.4 12.4l-1.1-1.1M4.7 4.7 3.6 3.6"/></symbol>
+  <symbol id="i-browser" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 6h12"/><circle cx="4.2" cy="4.5" r=".5"/><circle cx="6" cy="4.5" r=".5"/></symbol>
   <symbol id="i-wand" viewBox="0 0 16 16"><path d="M3 13 11 5"/><path d="m10 3 .7 1.8L12.5 5.5l-1.8.7L10 8l-.7-1.8L7.5 5.5l1.8-.7z"/><path d="M13.5 9.5 14 11l1.5.5-1.5.5-.5 1.5-.5-1.5L11 11l1.5-.5z"/></symbol>
   <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 14 14"/></symbol>
   <symbol id="i-plug" viewBox="0 0 16 16"><path d="M6 2v4"/><path d="M10 2v4"/><path d="M4 6h8v2.5A4 4 0 0 1 8 12.5 4 4 0 0 1 4 8.5z"/><path d="M8 12.5V14.5"/></symbol>
@@ -86,8 +88,8 @@
       <span>Providers</span><span class="chev">›</span>
     </button>
     <div id="providers" aria-label="Providers" hidden></div>
-    <button class="nav-row" id="open-connections">
-      <svg class="ic"><use href="#i-plug"></use></svg><span>Connections</span>
+    <button class="nav-row" id="open-settings">
+      <svg class="ic"><use href="#i-gear"></use></svg><span>Settings</span>
     </button>
   </footer>
 </aside>
@@ -474,55 +476,102 @@
   </menu>
 </dialog>
 
-<dialog id="connections-dialog">
-  <h2>Connections</h2>
-  <p class="explain">
-    What answers each kind of request. Chat and embedding are chosen separately on
-    purpose: the model you think with and the model you remember with are different
-    decisions, and they send different things to different places.
-  </p>
+<dialog id="settings-dialog">
+  <h2>Settings</h2>
 
-  <div id="conn-routes" class="conn-routes"></div>
+  <!-- Tabs rather than one long scroll: these are unrelated decisions that
+       happen to be settings, and a person opening this has come for exactly
+       one of them. The panels are `hidden` rather than styled away, so the
+       tab that is not showing is also not reachable by keyboard. -->
+  <div class="tabs" role="tablist" aria-label="Settings">
+    <button class="tab" role="tab" id="tab-browser" aria-controls="panel-browser" aria-selected="true">
+      <svg class="ic"><use href="#i-browser"></use></svg><span>Browser</span>
+    </button>
+    <button class="tab" role="tab" id="tab-connections" aria-controls="panel-connections" aria-selected="false">
+      <svg class="ic"><use href="#i-plug"></use></svg><span>Connections</span>
+    </button>
+  </div>
 
-  <div class="sec-head"><span>Connected</span></div>
-  <ul id="conn-list" class="conn-list"></ul>
+  <section class="tab-panel" role="tabpanel" id="panel-browser" aria-labelledby="tab-browser">
+    <p class="explain">
+      Which browser openmirror drives — both when the agent browses and when it searches.
+      Chromium comes with the browser extra and is always the right version for it;
+      your own Chrome has the codecs Chromium lacks and looks like an ordinary visitor
+      to sites that check. Firefox and WebKit are different engines, not reskinned
+      Chromium.
+    </p>
+    <p class="explain">
+      Your profile and logins are per browser. Switching means signing in again in the
+      new one — once, by hand, which is the arrangement that keeps openmirror from ever
+      needing a password.
+    </p>
 
-  <div class="sec-head"><span>Add</span></div>
-  <form id="conn-add" class="conn-add">
-    <label class="field">
-      <span>Service</span>
-      <select id="conn-host"></select>
+    <ul id="browser-list" class="conn-list"></ul>
+
+    <label class="field" id="browser-path-field" hidden>
+      <span>Path to the binary <em>— a Chromium-based build: Brave, ungoogled-chromium, a
+        distribution build</em></span>
+      <input id="browser-path" placeholder="/usr/bin/brave-browser" autocomplete="off">
     </label>
-    <p id="conn-note" class="explain"></p>
-    <label class="field">
-      <span>Address</span>
-      <input id="conn-url" placeholder="https://…">
-    </label>
-    <label class="field">
-      <span>Key <em>— kept in a file on this machine, never sent back to this page</em></span>
-      <input id="conn-key" type="password" autocomplete="off" placeholder="leave blank if it needs none">
-    </label>
-    <label class="switch">
-      <input type="checkbox" id="conn-local">
-      <span>This runs on hardware I control
-        <em>— decides whether "local only" will accept it</em></span>
-    </label>
-    <label class="switch">
-      <input type="checkbox" id="conn-tor">
-      <span>Reach it through Tor
-        <em id="conn-tor-note">— checked before saving; if the proxy is not there, this is refused
-        rather than saved and quietly ignored</em></span>
-    </label>
+
+    <p id="browser-state" class="explain"></p>
+
     <menu>
-      <span id="conn-status" class="meta"></span>
+      <button id="browser-reset" class="ghost">Use the default</button>
       <div class="spacer"></div>
-      <button type="submit" class="primary">Connect</button>
+      <span id="browser-status" class="meta"></span>
     </menu>
-  </form>
+  </section>
+
+  <section class="tab-panel" role="tabpanel" id="panel-connections" aria-labelledby="tab-connections" hidden>
+    <p class="explain">
+      What answers each kind of request. Chat and embedding are chosen separately on
+      purpose: the model you think with and the model you remember with are different
+      decisions, and they send different things to different places.
+    </p>
+
+    <div id="conn-routes" class="conn-routes"></div>
+
+    <div class="sec-head"><span>Connected</span></div>
+    <ul id="conn-list" class="conn-list"></ul>
+
+    <div class="sec-head"><span>Add</span></div>
+    <form id="conn-add" class="conn-add">
+      <label class="field">
+        <span>Service</span>
+        <select id="conn-host"></select>
+      </label>
+      <p id="conn-note" class="explain"></p>
+      <label class="field">
+        <span>Address</span>
+        <input id="conn-url" placeholder="https://…">
+      </label>
+      <label class="field">
+        <span>Key <em>— kept in a file on this machine, never sent back to this page</em></span>
+        <input id="conn-key" type="password" autocomplete="off" placeholder="leave blank if it needs none">
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="conn-local">
+        <span>This runs on hardware I control
+          <em>— decides whether "local only" will accept it</em></span>
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="conn-tor">
+        <span>Reach it through Tor
+          <em id="conn-tor-note">— checked before saving; if the proxy is not there, this is refused
+          rather than saved and quietly ignored</em></span>
+      </label>
+      <menu>
+        <span id="conn-status" class="meta"></span>
+        <div class="spacer"></div>
+        <button type="submit" class="primary">Connect</button>
+      </menu>
+    </form>
+  </section>
 
   <menu>
     <div class="spacer"></div>
-    <button id="conn-close" class="ghost">Close</button>
+    <button id="settings-close" class="ghost">Close</button>
   </menu>
 </dialog>
 

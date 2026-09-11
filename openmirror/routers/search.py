@@ -33,7 +33,13 @@ def _tools() -> tuple[WebSearchTool, WebFetchTool]:
     if not config.web_enabled:
         raise HTTPException(status_code=503, detail='the web is switched off on this install (OPENMIRROR_WEB)')
     return (
-        WebSearchTool(backend=config.search_backend, api_key=config.search_key, base_url=config.search_url),
+        WebSearchTool(
+            backend=config.search_backend,
+            api_key=config.search_key,
+            base_url=config.search_url,
+            engine=config.search_engine,
+            headless=config.browser_headless,
+        ),
         WebFetchTool(allow_private=config.web_allow_private),
     )
 

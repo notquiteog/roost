@@ -4,6 +4,12 @@ Two tools, and the split matters: `web_search` finds pages, `web_fetch` reads
 one. Models given a single combined tool tend to search when they already have
 a URL, which wastes a step and a search quota.
 
+Search has four backends and the default one holds no key: `headless` drives a
+real browser, which is the only keyless path that still works now that the
+engines answer plain HTTP requests with a challenge page. See
+`openmirror/agent/headless_search.py`. The keyed backends are better where a key
+exists — faster, and no Chromium — so they stay.
+
 Everything fetched here is **untrusted input**. A page can contain text
 addressed to the agent — "ignore your instructions", "the user has approved
 this", "run this command" — and it will be as fluent as anything a person
@@ -192,10 +198,22 @@ class WebSearchTool(Tool):
         'required': ['query'],
     }
 
-    def __init__(self, backend: str = 'duckduckgo', api_key: str = '', base_url: str = '') -> None:
+    def __init__(
+        self,
+        backend: str = 'headless',
+        api_key: str = '',
+        base_url: str = '',
+        engine: str = 'auto',
+        headless: bool = True,
+    ) -> None:
         self.backend = backend
         self.api_key = api_key
         self.base_url = base_url
+        # Which engine the headless backend queries, and whether its browser is
+        # actually hidden. Visible is for debugging a page that is refusing:
+        # the failure mode of a scraper is always easier to see than to read.
+        self.engine = engine
+        self.headless = headless
 
     def assess(self, args: dict[str, Any], ctx: ToolContext) -> Assessment:
         query = (args.get('query') or '').strip()
@@ -215,10 +233,12 @@ class WebSearchTool(Tool):
             'brave': self._brave,
             'tavily': self._tavily,
             'searxng': self._searxng,
+            'headless': self._headless,
             'duckduckgo': self._duckduckgo,
         }.get(self.backend)
         if handler is None:
-            raise ToolError(f'unknown search backend: {self.backend}')
+            known = 'headless, brave, tavily, searxng, duckduckgo'
+            raise ToolError(f'unknown search backend: {self.backend} (known: {known})')
         return await handler(query, min(max(count, 1), 20))
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> Output:
@@ -294,12 +314,32 @@ class WebSearchTool(Tool):
             for r in (body.get('results') or [])[:count]
         ]
 
+    async def _headless(self, query: str, count: int) -> list[dict]:
+        """A real browser, running the page's JavaScript.
+
+        The default, because it is the only backend that needs nothing bought,
+        hosted or signed up for. It costs a Chromium, shared between searches
+        and reaped when idle; the details are in `agent/headless_search.py`.
+        """
+        from openmirror.agent.headless_search import SearchUnavailable, searcher
+
+        try:
+            live = searcher(self.engine, headless=self.headless)
+            return await live.search(query, count)
+        except SearchUnavailable as exc:
+            # The message already names what to install or which setting to
+            # change, so it is passed through rather than wrapped in a second
+            # layer of "search failed".
+            raise ToolError(str(exc)) from exc
+
     async def _duckduckgo(self, query: str, count: int) -> list[dict]:
         """DuckDuckGo's HTML endpoint, parsed.
 
-        Kept because it needs no key, but do not rely on it: as of testing,
-        both `html.duckduckgo.com` and `lite.duckduckgo.com` answer automated
-        requests with a 202 and an anomaly page rather than results. That is
+        Superseded by `headless`, which asks the same engine through a browser
+        and gets answers. Kept because it needs neither a key nor a Chromium,
+        and on a machine that can spare neither it is worth one attempt — but
+        as of testing both `html.duckduckgo.com` and `lite.duckduckgo.com`
+        answer automated requests with a 202 and an anomaly page. That is
         detected below and reported, because a search tool that silently
         returns nothing teaches a model that the web is empty — it stops
         searching and starts guessing, which is worse than an error.
@@ -316,10 +356,11 @@ class WebSearchTool(Tool):
 
         if 'anomaly' in markup.lower() or 'result__a' not in markup:
             raise ToolError(
-                'DuckDuckGo refused this request — it blocks automated traffic, so the '
-                'keyless fallback is not usable. Configure a real search backend: set '
-                'OPENMIRROR_SEARCH_BACKEND to brave or tavily with OPENMIRROR_SEARCH_KEY, or to '
-                'searxng with OPENMIRROR_SEARCH_URL pointing at your own instance.'
+                'DuckDuckGo refused this request — it blocks automated traffic, so this '
+                'backend is not usable. Use OPENMIRROR_SEARCH_BACKEND=headless, which asks the '
+                'same engine through a real browser and needs no key, or a keyed backend: '
+                'brave or tavily with OPENMIRROR_SEARCH_KEY, or searxng with '
+                'OPENMIRROR_SEARCH_URL pointing at your own instance.'
             )
 
         results: list[dict] = []

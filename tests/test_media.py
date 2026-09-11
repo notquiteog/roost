@@ -417,5 +417,48 @@ async def test_a_backend_that_does_size_by_pixels_still_records_it(tmp_path):
     await job.task
 
     recipe = service.store.get(job.media[0].id).params
-    assert recipe['size'] == '1344x768'
+    # In the units that backend actually uses. No synthesised `size` on top:
+    # it is the same fact twice, and only one of the two was ever a control.
+    assert recipe['width'] == 1344
+    assert recipe['height'] == 768
+    assert 'size' not in recipe
     assert recipe['n'] == 2
+
+
+async def test_a_size_that_was_asked_for_is_recorded_as_asked(tmp_path):
+    """Several backends take `size` as a single enum. That one is a control,
+    so it goes in — the rule is not "never record size", it is "record what was
+    sent"."""
+    class Sized(_Recorder):
+        async def describe(self, model: str = ''):
+            return [
+                Param('prompt', 'Prompt', 'text'),
+                Param('size', 'Size', 'enum', default='1024x1024',
+                      options=['1024x1024', '1792x1024']),
+            ]
+
+    service = _service(tmp_path, Sized())
+    job = service.start('image', 'a lighthouse', params={'size': '1792x1024'})
+    await job.task
+    assert service.store.get(job.media[0].id).params == {'size': '1792x1024'}
+
+
+async def test_the_agents_job_check_tells_queued_apart_from_failed(tmp_path):
+    """A job starts queued now that both kinds are jobs. Reporting that through
+    the catch-all produced "queued: no reason given", which reads to a model as
+    a failure it should recover from rather than work that has not begun."""
+    from openmirror.agent.tools.media import MediaJobTool
+
+    impl = _Recorder(stall=True)
+    service = _service(tmp_path, impl)
+    job = service.start('image', 'a cat')
+    job.note = 'number 3 in the queue'
+
+    out = await MediaJobTool(service).run({'job_id': job.id}, None)
+    assert 'Not finished' in out.content
+    assert 'number 3 in the queue' in out.content
+    assert 'no reason given' not in out.content
+
+    service.cancel(job.id)
+    with pytest.raises(__import__('asyncio').CancelledError):
+        await job.task

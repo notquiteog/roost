@@ -16,7 +16,7 @@
  */
 
 import { companion, caption } from './companions/index.js';
-import { wireConnections } from './connections.js';
+import { openConnections, wireConnections } from './connections.js';
 import { $, api, el, icon, onReachable, socket, took } from './dom.js';
 import { endLive, isLive, wireLive } from './live.js';
 import { go, mode, onEnter, onLeave, wireModes } from './modes.js';
@@ -263,6 +263,8 @@ const VERBS = {
   web_search: 'Searched the web for',
   web_fetch: 'Fetched',
   research: 'Looked into',
+  mcp_list_resources: 'Listed what the servers have',
+  mcp_read_resource: 'Read',
   browser_navigate: 'Opened',
   browser_read: 'Read the page',
   browser_click: 'Clicked',
@@ -1015,6 +1017,164 @@ function wireMemory() {
   });
 }
 
+/* ----------------------------------------------------------------- browser */
+
+/* Which browser the agent drives. A list rather than a dropdown because the
+   interesting part of each option is the sentence explaining when you would
+   want it, and a dropdown has nowhere to put that — and because an option that
+   is not installed has to be able to say so next to itself rather than
+   disappearing, which is how someone concludes openmirror cannot use their Chrome. */
+
+async function loadBrowserChoices() {
+  const res = await api('/api/browser');
+  if (!res || !res.ok) return null;
+  const state = await res.json();
+  renderBrowserChoices(state);
+  return state;
+}
+
+function renderBrowserChoices(state) {
+  const list = $('#browser-list');
+  list.innerHTML = '';
+
+  for (const choice of state.choices) {
+    const row = document.createElement('li');
+    row.className = 'conn-row';
+    const chosen = choice.id === state.browser;
+    row.innerHTML = `
+      <label class="switch">
+        <input type="radio" name="browser-choice" value="${choice.id}"
+               ${chosen ? 'checked' : ''} ${choice.installed ? '' : 'disabled'}>
+        <span>${choice.label}
+          <em>${choice.note}${choice.installed ? '' : ` — ${choice.why || 'not available here'}`}</em>
+        </span>
+      </label>`;
+    row.querySelector('input').onchange = () => {
+      $('#browser-path-field').hidden = choice.id !== 'custom';
+      if (choice.id === 'custom') $('#browser-path').focus();
+      else saveBrowserChoice(choice.id);
+    };
+    list.appendChild(row);
+  }
+
+  $('#browser-path-field').hidden = state.browser !== 'custom';
+  $('#browser-path').value = state.executable || '';
+
+  // Which of the two is in force, said plainly: somebody who set
+  // OPENMIRROR_BROWSER_CHANNEL and then picked something here needs to know which
+  // one won, and "saved" versus "from the environment" is that answer.
+  const where = state.source === 'saved'
+    ? 'Saved here, so it overrides OPENMIRROR_BROWSER_ENGINE and friends.'
+    : 'From this install\'s environment. Choosing one here overrides it.';
+  $('#browser-state').textContent =
+    `${state.label} — ${where} Running ${state.headless ? 'headless' : 'headful'}; `
+    + `profile at ${state.profile}.`;
+  $('#browser-reset').hidden = state.source !== 'saved';
+}
+
+async function saveBrowserChoice(id) {
+  const body = { browser: id };
+  if (id === 'custom') body.executable = $('#browser-path').value.trim();
+
+  $('#browser-status').textContent = 'Checking…';
+  const res = await api('/api/browser', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res) {
+    $('#browser-status').textContent = 'The daemon is not answering.';
+    return;
+  }
+  const state = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    // The refusal is the useful part — "Chrome is not installed", "that path is
+    // not executable" — so it is shown rather than replaced with "failed".
+    const why = (state && state.detail) || 'Could not use that browser.';
+    // Re-read, so the radio goes back to what is actually in force rather than
+    // sitting on the option that was just refused — but put back what they
+    // typed. A path rejected for one wrong character is a path to fix, and
+    // clearing the field makes them type the whole thing again.
+    await loadBrowserChoices();
+    if (id === 'custom') {
+      $('#browser-path-field').hidden = false;
+      $('#browser-path').value = body.executable;
+      $('#browser-path').focus();
+    }
+    $('#browser-status').textContent = why;
+    return;
+  }
+  $('#browser-status').textContent = (state && state.note) || 'Saved.';
+  loadBrowserChoices();
+}
+
+function wireBrowserChoice() {
+  // Enter in the path field saves it. A Save button next to a single input that
+  // already has Enter is a button nobody presses twice.
+  $('#browser-path').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    saveBrowserChoice('custom');
+  });
+
+  $('#browser-reset').onclick = async () => {
+    await api('/api/browser', { method: 'DELETE' });
+    $('#browser-status').textContent = 'Back to the default.';
+    loadBrowserChoices();
+  };
+}
+
+/* ---------------------------------------------------------------- settings */
+
+/* One dialog, two tabs, and a hook per tab for whatever it needs loading.
+   Tabs rather than one scrolling page because which browser to drive and which
+   model answers a request are unrelated decisions that happen to both be
+   settings — somebody opening this has come for exactly one of them.
+
+   The panel that is not showing is `hidden`, not merely invisible: a panel
+   hidden with CSS is still in the tab order, and tabbing into a form you
+   cannot see is a way to edit a connection by accident. */
+
+const SETTINGS_TABS = {
+  'tab-browser': { panel: 'panel-browser', load: () => loadBrowserChoices() },
+  'tab-connections': { panel: 'panel-connections', load: () => openConnections() },
+};
+
+function showSettingsTab(id) {
+  for (const [tab, { panel }] of Object.entries(SETTINGS_TABS)) {
+    const on = tab === id;
+    $(`#${tab}`).setAttribute('aria-selected', String(on));
+    $(`#${panel}`).hidden = !on;
+  }
+  SETTINGS_TABS[id].load();
+}
+
+function wireSettings(onConnectionsChanged) {
+  for (const id of Object.keys(SETTINGS_TABS)) {
+    $(`#${id}`).onclick = () => showSettingsTab(id);
+  }
+
+  $('#open-settings').onclick = () => {
+    showSettingsTab('tab-browser');
+    $('#settings-dialog').showModal();
+  };
+
+  $('#settings-close').onclick = () => {
+    $('#settings-dialog').close();
+    // Connections are re-read on close whichever tab was open. Changing a
+    // route and coming back to a header still naming the old model is how you
+    // conclude the change did not take.
+    if (onConnectionsChanged) onConnectionsChanged();
+  };
+
+  // The dialog's own close (Escape, the backdrop) has to do the same, or the
+  // refresh depends on which control was used to leave.
+  $('#settings-dialog').addEventListener('close', () => {
+    if (onConnectionsChanged) onConnectionsChanged();
+  });
+}
+
 /* ------------------------------------------------------------------- shell */
 
 let refreshTimer = null;
@@ -1404,6 +1564,7 @@ function wireModeLifecycle() {
 
 wire();
 wireMemory();
+wireBrowserChoice();
 wireRewind();
 wireTheOneButton();
 
@@ -1420,7 +1581,8 @@ wireWatch({
 wireSearch();
 // Adding or removing a connection changes what every picker on the page can
 // offer, so the whole lot is refreshed rather than the dialog patching them.
-wireConnections(() => loadProviders());
+wireConnections();
+wireSettings(() => loadProviders());
 wireModeLifecycle();
 
 // Last, and that ordering is load-bearing: this restores the mode you were

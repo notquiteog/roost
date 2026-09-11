@@ -42,6 +42,9 @@ vec = ["sqlite-vec>=0.1.9"]
 
 [project.scripts]
 openmirror = "openmirror.main:main"
+# This install as an MCP server on stdio, for a client that would rather spawn
+# it than reach it over HTTP. See openmirror/mcp/server.py.
+openmirror-mcp = "openmirror.mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["openmirror"]

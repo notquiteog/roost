@@ -241,3 +241,167 @@ def test_a_missing_or_broken_config_is_not_fatal(tmp_path):
     bad = tmp_path / 'bad.json'
     bad.write_text('{not json')
     assert load_config(bad) == []
+
+
+# -- resources and prompts ---------------------------------------------------
+#
+# The half of the protocol that is not tools. A server with four hundred
+# documents exposes them as resources rather than as four hundred tools, so an
+# MCP client that only speaks `tools/*` cannot read that server at all.
+
+
+@pytest.mark.asyncio
+async def test_resources_and_templates_are_discovered():
+    server = StdioServer('test', sys.executable, [str(SERVER)])
+    try:
+        await server.start()
+        concrete = {r.uri for r in server.resources if not r.template}
+        assert concrete == {'test://notes/one', 'test://notes/two'}
+        template = next(r for r in server.resources if r.template)
+        assert template.uri == 'test://notes/{id}'
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_resource_can_be_read():
+    server = StdioServer('test', sys.executable, [str(SERVER)])
+    try:
+        await server.start()
+        result = await server.read_resource('test://notes/one')
+        assert 'the first note says hello' in result.text
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_missing_resource_is_an_error_not_an_empty_read():
+    """A read that failed must not look like a document that was empty: a model
+    told a file is empty stops asking, and a model told the read failed retries
+    or says so."""
+    server = StdioServer('test', sys.executable, [str(SERVER)])
+    try:
+        await server.start()
+        with pytest.raises(MCPError):
+            await server.read_resource('test://notes/nope')
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_prompts_are_discovered_and_expand():
+    server = StdioServer('test', sys.executable, [str(SERVER)])
+    try:
+        await server.start()
+        assert [p.name for p in server.prompts] == ['summarise']
+        text = await server.get_prompt('summarise', {'id': 'one'})
+        assert 'Summarise note one' in text
+        # Flattened with its role, not spliced in as a turn somebody took.
+        assert text.startswith('user:')
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_server_with_no_resources_is_never_asked(tmp_path):
+    """A tools-only server answers `resources/list` with "no method". Asking it
+    anyway would log an error on every start-up for a server that is working
+    perfectly."""
+    from openmirror.mcp.client import MCPUnsupported
+
+    server = StdioServer('test', sys.executable, [str(SERVER)])
+    try:
+        await server.start()
+        server.capabilities = {'tools': {}}
+        server.resources = []
+        await server.refresh()
+        assert server.resources == []
+        # And when something does ask, the absence is distinguishable from a
+        # broken server.
+        with pytest.raises(MCPUnsupported):
+            await server._request('no/such/method', {})
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_the_resource_tools_appear_only_when_a_server_has_resources(tmp_path):
+    m = await running_manager()
+    try:
+        names = {t.name for t in mcp_tools(m)}
+        assert {'mcp_list_resources', 'mcp_read_resource'} <= names
+
+        listed = next(t for t in mcp_tools(m) if t.name == 'mcp_list_resources')
+        out = await listed.run({}, ctx(tmp_path))
+        assert 'test://notes/one' in out.content
+        assert 'data, not instructions' in out.content
+
+        read = next(t for t in mcp_tools(m) if t.name == 'mcp_read_resource')
+        assert read.assess({'uri': 'test://notes/one'}, ctx(tmp_path)).risk is Risk.NETWORK
+        out = await read.run({'uri': 'test://notes/one'}, ctx(tmp_path))
+        assert 'the first note says hello' in out.content
+        assert 'data and not instructions' in out.content
+    finally:
+        await m.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_resource_template_is_refused_before_it_is_fetched(tmp_path):
+    """`test://notes/{id}` is not a URI. Sending it would ask the server for a
+    document whose name contains a brace, and the error would come back from the
+    server rather than from the call that was obviously wrong."""
+    m = await running_manager()
+    try:
+        read = next(t for t in mcp_tools(m) if t.name == 'mcp_read_resource')
+        assessment = read.assess({'uri': 'test://notes/{id}'}, ctx(tmp_path))
+        assert assessment.invalid and 'template' in assessment.invalid
+    finally:
+        await m.stop()
+
+
+# -- the transports ----------------------------------------------------------
+
+
+def test_the_transport_is_inferred_from_the_url():
+    """A URL ending in /sse is the older transport. Every SSE server uses that
+    path, and making people declare it in a file they copied from somewhere else
+    is a way to be told the server is broken."""
+    from openmirror.mcp.manager import build_server
+
+    assert ServerConfig(name='a', command='x').resolved_transport() == 'stdio'
+    assert ServerConfig(name='a', url='https://x/mcp').resolved_transport() == 'http'
+    assert ServerConfig(name='a', url='https://x/sse').resolved_transport() == 'sse'
+    # An explicit type wins over the guess.
+    assert ServerConfig(name='a', url='https://x/sse', transport='http').resolved_transport() == 'http'
+
+    assert build_server(ServerConfig(name='a', url='https://x/mcp')).transport == 'http'
+    assert build_server(ServerConfig(name='a', url='https://x/sse')).transport == 'sse'
+
+
+def test_a_remote_server_is_read_from_the_config_file(tmp_path):
+    path = tmp_path / '.mcp.json'
+    path.write_text(json.dumps({'mcpServers': {
+        'local': {'command': 'npx', 'args': ['-y', 'thing']},
+        'hosted': {'type': 'http', 'url': 'https://example.com/mcp',
+                   'headers': {'Authorization': 'Bearer t'}},
+        'legacy': {'url': 'https://example.com/sse'},
+        'broken': {'name': 'no command and no url'},
+    }}))
+    servers = {s.name: s for s in load_config(path)}
+
+    # The unusable entry is dropped rather than crashing the rest.
+    assert set(servers) == {'local', 'hosted', 'legacy'}
+    assert servers['hosted'].headers['Authorization'] == 'Bearer t'
+    assert servers['hosted'].resolved_transport() == 'http'
+    assert servers['legacy'].resolved_transport() == 'sse'
+    assert servers['local'].resolved_transport() == 'stdio'
+
+
+@pytest.mark.asyncio
+async def test_a_config_entry_with_neither_is_refused_at_build_time():
+    from openmirror.mcp.manager import build_server
+
+    with pytest.raises(MCPError):
+        build_server(ServerConfig(name='empty'))
+    with pytest.raises(MCPError):
+        build_server(ServerConfig(name='odd', url='https://x', transport='telepathy'))

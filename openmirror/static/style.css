@@ -442,7 +442,20 @@ body.companion-off #transcript { padding-bottom: 10px; }
 .starter:hover { color: var(--ink); background: none; }
 .starter .ic { color: var(--faint); }
 
-body.blank main { justify-content: center; }
+/* The blank state centres the thing you type into — and only that.
+   `main` is a column flex, so `justify-content: center` centred every child of
+   it, the header bar included: with an empty transcript the bar sat a third of
+   the way down the page with nothing above it at all.
+
+   Two auto margins do the job without a wrapper element. An auto margin eats
+   free space before `justify-content` is consulted, so the one under the bar
+   and the one under the last thing in the column split what is left between
+   them — which leaves the bar at the top and the group centred underneath it.
+   The panes are `flex: 1`, so in every other mode there is no free space and
+   none of this applies. */
+body.blank main { justify-content: flex-start; }
+body.blank #bar { margin-bottom: auto; }
+body.blank #starters:not([hidden]) { margin-bottom: auto; }
 body.blank #transcript { flex: 0 0 auto; overflow: visible; padding-bottom: 0; }
 body.blank #perch-rail { display: none; }
 body.blank #composer { border-top: none; background: transparent; }
@@ -567,13 +580,56 @@ dialog::backdrop { background: rgba(0, 0, 0, .40); -webkit-backdrop-filter: blur
 dialog h2 { margin: 0 0 15px; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
 dialog label { display: block; margin-bottom: 13px; font-size: 13px; color: var(--dim); }
 
-/* Text and select fields fill the dialog; checkboxes must not, or they
-   stretch to the full width and shove their own label off the edge. */
-dialog label input:not([type=checkbox]), dialog label select {
+/* Text and select fields fill the dialog; the small controls must not, or
+   they stretch to the full width and shove their own label off the edge.
+   Radio was missing from this for as long as nothing used one, and the result
+   is not a subtly wrong margin — a 100%-wide radio makes every row in a list
+   two hundred pixels tall and pushes the list off the bottom of the dialog. */
+dialog label input:not([type=checkbox]):not([type=radio]), dialog label select {
   display: block; width: 100%; margin-top: 5px; color: var(--ink);
 }
-dialog label.switch input[type=checkbox] { width: auto; display: inline-block; }
+dialog label.switch input[type=checkbox],
+dialog label.switch input[type=radio] { width: auto; display: inline-block; }
 dialog menu { display: flex; gap: 9px; justify-content: flex-end; margin: 18px 0 0; padding: 0; }
+
+/* --- settings ------------------------------------------------------------ */
+
+#settings-dialog { min-width: 560px; max-width: 680px; }
+#settings-dialog .explain { color: var(--dim); font-size: 12.5px; margin: 0 0 13px; }
+#settings-dialog .spacer { flex: 1; }
+
+/* The tab strip. A quiet row of two, with the selected one carrying a line
+   under it rather than a filled background: these are settings, not modes, and
+   a tab bar that shouts competes with the thing it is framing. */
+.tabs {
+  display: flex; gap: 4px; margin: 0 0 16px;
+  border-bottom: 1px solid var(--edge-soft);
+}
+.tabs .tab {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 12px; margin-bottom: -1px;
+  font-size: 13px; color: var(--dim);
+  background: none; border: none; border-bottom: 2px solid transparent;
+  border-radius: 0; box-shadow: none;
+}
+.tabs .tab:hover { color: var(--ink); background: none; }
+.tabs .tab .ic { color: var(--faint); }
+.tabs .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+.tabs .tab[aria-selected="true"] .ic { color: var(--ink); }
+
+/* Panels scroll on their own so the tab strip and the Close button stay put.
+   A dialog whose tabs scroll off the top is a dialog you get lost in. */
+.tab-panel { max-height: 62vh; overflow-y: auto; }
+
+#browser-dialog { min-width: 540px; max-width: 660px; }
+#browser-dialog .explain { color: var(--dim); font-size: 12.5px; margin: 0 0 13px; }
+#browser-dialog .spacer { flex: 1; }
+#browser-list { list-style: none; margin: 4px 0 14px; padding: 0; }
+#browser-list .conn-row { display: block; padding: 0; border: 0; }
+/* A disabled choice stays visible and greys out. Hiding a browser that is not
+   installed is how somebody concludes openmirror cannot use their Chrome. */
+#browser-list input:disabled + span { color: var(--faint); }
+#browser-state { margin: 0; }
 
 /* --- memory -------------------------------------------------------------- */
 
