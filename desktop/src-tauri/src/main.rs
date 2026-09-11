@@ -1,201 +1,611 @@
-// openmirror's desktop shell.
+// openmirror's desktop app.
 //
-// This deliberately contains no application logic. Everything openmirror does — the
-// agent, the providers, voice, the browser, desktop control — lives in the
-// Python daemon, and this is a window onto it plus the three things a browser
-// tab genuinely cannot do: live in the tray, survive being closed, and put a
-// notification in front of you when the agent is waiting on an answer.
+// This deliberately contains no application logic. Everything openmirror does —
+// the agent, the providers, voice, the browser, desktop control — lives in the
+// Python daemon, and this is a window onto it plus the things a browser tab
+// cannot do: live in the tray, survive being closed, tell you when the agent
+// is waiting on you, and keep a daemon running for exactly as long as the app.
 //
-// It also manages the daemon's lifetime, but only when it started it. If one
-// is already listening — run by systemd, or by hand in a terminal — this
-// attaches to that and leaves it alone on exit. Killing a daemon somebody else
-// started would take their running sessions with it.
+// A release carries its own daemon, frozen by PyInstaller, so installing the
+// app is installing openmirror. It still attaches to one that is already
+// listening — run by systemd, or by hand in a terminal — and leaves that one
+// alone on exit. Killing a daemon somebody else started would take their
+// running sessions with it; only a daemon this app started is its to stop.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+mod daemon;
+
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
+use tauri::ipc::CapabilityBuilder;
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::webview::{DownloadEvent, NewWindowResponse};
+use tauri::{AppHandle, Manager, RunEvent, State, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_opener::OpenerExt;
 
-/// The daemon, if this process started it. `None` means one was already there.
-struct Daemon(Mutex<Option<Child>>);
+use daemon::{Daemon, Home, Probe, Settings};
 
-fn base_url() -> String {
-    let port = std::env::var("OPENMIRROR_PORT").unwrap_or_else(|_| "8477".into());
-    format!("http://127.0.0.1:{port}")
+/// How long a daemon may take to answer before the window says so. A first
+/// start unpacks some 50 MB, and Windows scans all of it before it may run.
+const START_LIMIT: Duration = Duration::from_secs(120);
+/// How long a daemon gets to shut down properly before it is killed.
+const STOP_GRACE: Duration = Duration::from_secs(10);
+
+/// What the loading page shows. It asks for this, rather than being sent it,
+/// so it cannot miss news that arrived before it finished loading.
+#[derive(Clone, Serialize)]
+struct Status {
+    phase: &'static str,
+    title: String,
+    detail: String,
+    tail: Option<String>,
+    log: Option<String>,
 }
 
-/// Is something already answering on the port?
-fn daemon_is_up(url: &str) -> bool {
-    // A plain TCP connect rather than an HTTP request: it needs no dependency,
-    // and "is the port open" is the only question being asked.
-    let addr = url.trim_start_matches("http://");
-    std::net::TcpStream::connect_timeout(
-        &addr.parse().unwrap_or_else(|_| "127.0.0.1:8477".parse().unwrap()),
-        Duration::from_millis(400),
-    )
-    .is_ok()
+impl Status {
+    fn starting(detail: impl Into<String>) -> Self {
+        Self { phase: "starting", title: "Starting openmirror".into(), detail: detail.into(), tail: None, log: None }
+    }
+
+    fn ready() -> Self {
+        Self { phase: "ready", title: "openmirror is running".into(), detail: String::new(), tail: None, log: None }
+    }
+
+    fn failed(title: impl Into<String>, detail: impl Into<String>, log: Option<&Path>) -> Self {
+        Self {
+            phase: "failed",
+            title: title.into(),
+            detail: detail.into(),
+            tail: log.and_then(|path| daemon::tail(path, 40)),
+            log: log.map(|path| path.display().to_string()),
+        }
+    }
 }
 
-/// Start the daemon, preferring an installed `openmirror` over a source checkout.
-fn spawn_daemon() -> Option<Child> {
-    let candidates: Vec<(String, Vec<String>)> = vec![
-        ("openmirror".into(), vec![]),
-        (
-            std::env::var("OPENMIRROR_PYTHON").unwrap_or_else(|_| "python3".into()),
-            vec!["-m".into(), "openmirror.main".into()],
-        ),
-    ];
+struct Shell {
+    home: Home,
+    settings: Settings,
+    port: u16,
+    status: Mutex<Status>,
+    /// The daemon, if this app started it. `None` when it attached to one.
+    daemon: Mutex<Option<Daemon>>,
+    starting: AtomicBool,
+    quitting: AtomicBool,
+}
 
-    for (program, args) in candidates {
-        match Command::new(&program)
-            .args(&args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(child) => {
-                eprintln!("openmirror: started daemon via {program}");
-                return Some(child);
+impl Shell {
+    fn daemon_log(&self) -> PathBuf {
+        self.home.logs().join("daemon.log")
+    }
+
+    fn set(&self, status: Status) {
+        if let Ok(mut current) = self.status.lock() {
+            *current = status;
+        }
+    }
+}
+
+static LOG: OnceLock<Mutex<File>> = OnceLock::new();
+static BEGAN: OnceLock<Instant> = OnceLock::new();
+
+/// A line in `desktop.log`, and on stderr for anyone running this from a
+/// terminal. A release on Windows has no console and one opened from the Dock
+/// has nowhere for stderr to go, so the file is the only place to read it.
+fn note(message: impl AsRef<str>) {
+    let since = BEGAN.get_or_init(Instant::now).elapsed().as_secs_f32();
+    let line = format!("[{since:7.2}s] {}\n", message.as_ref());
+    eprint!("openmirror: {line}");
+    if let Some(file) = LOG.get() {
+        if let Ok(mut file) = file.lock() {
+            let _ = file.write_all(line.as_bytes());
+        }
+    }
+}
+
+fn daemon_url(port: u16) -> Url {
+    format!("http://127.0.0.1:{port}/").parse().expect("a well-formed URL")
+}
+
+/// Where Tauri serves the app's own files: a scheme of its own, except on
+/// Windows, where WebView2 wants plain http.
+fn loading_url() -> Url {
+    let url = if cfg!(windows) { "http://tauri.localhost/index.html" } else { "tauri://localhost/index.html" };
+    url.parse().expect("a well-formed URL")
+}
+
+/// The pages this window may show: its own loading page, and the daemon's
+/// interface. Everything else — a provider's sign-up page, a link in a
+/// transcript — belongs in the user's browser, which has an address bar,
+/// their passwords and a back button. This window has none of those, and a
+/// page that navigated it away would leave no way back to the interface.
+fn belongs_here(url: &Url, port: u16) -> bool {
+    match url.scheme() {
+        "tauri" | "about" | "blob" => true,
+        "http" | "https" if url.host_str() == Some("tauri.localhost") => true,
+        "http" => {
+            matches!(url.host_str(), Some("127.0.0.1" | "localhost")) && url.port_or_known_default() == Some(port)
+        }
+        _ => false,
+    }
+}
+
+fn elsewhere(app: &AppHandle, url: &Url) {
+    note(format!("opening {url} in the browser"));
+    if let Err(e) = app.opener().open_url(url.as_str(), None::<&str>) {
+        note(format!("could not open {url}: {e}"));
+    }
+}
+
+fn show(app: &AppHandle, url: &Url) {
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(e) = window.navigate(url.clone()) {
+            note(format!("could not show {url}: {e}"));
+        }
+    }
+}
+
+fn raise(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// Find a daemon or start one, then show it — or say why not. Always on a
+/// thread of its own: waiting for a daemon must not stall the window that is
+/// saying so.
+fn start(app: &AppHandle) {
+    let shell = app.state::<Shell>();
+    if shell.starting.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let outcome = bring_up(&shell);
+    shell.starting.store(false, Ordering::SeqCst);
+    match outcome {
+        Ok(owned) => {
+            shell.set(Status::ready());
+            show(app, &daemon_url(shell.port));
+            let app = app.clone();
+            thread::spawn(move || watch(&app, owned));
+        }
+        Err(status) => {
+            note(format!("{}: {}", status.title, status.detail));
+            shell.set(status);
+            show(app, &loading_url());
+        }
+    }
+}
+
+/// Whether the daemon that answered is this app's own.
+fn bring_up(shell: &Shell) -> Result<bool, Status> {
+    let port = shell.port;
+    shell.set(Status::starting(format!("Looking for a daemon on port {port}.")));
+
+    match settle(port) {
+        Probe::Openmirror => {
+            note(format!("attaching to the daemon already on port {port}; it is not this app's to stop"));
+            return Ok(false);
+        }
+        Probe::Other(what) => {
+            return Err(Status::failed(
+                format!("Port {port} is taken"),
+                format!(
+                    "Something that is not openmirror is listening on 127.0.0.1:{port}: {what}. Stop it, or \
+                     give openmirror another port with OPENMIRROR_PORT in {}.",
+                    shell.settings.env_file.display()
+                ),
+                None,
+            ))
+        }
+        Probe::Nothing => {}
+    }
+
+    shell.set(Status::starting("Starting the daemon."));
+    let log = shell.daemon_log();
+    let mut daemon = Daemon::spawn(&shell.home, &shell.settings, &log)
+        .map_err(|why| Status::failed("openmirror could not start its daemon", why, Some(&log)))?;
+    note(format!("started the daemon with {} (its output is in {})", daemon.program, log.display()));
+    if let Some(path) = &daemon.path_note {
+        note(path);
+    }
+
+    let began = Instant::now();
+    loop {
+        if let Some(status) = daemon.exited() {
+            return Err(Status::failed(
+                "The daemon stopped as it started",
+                format!("It exited ({status}) before it answered. The end of its log is below."),
+                Some(&log),
+            ));
+        }
+        if daemon::probe(port) == Probe::Openmirror {
+            break;
+        }
+        if began.elapsed() > START_LIMIT {
+            let how = daemon.stop(STOP_GRACE);
+            return Err(Status::failed(
+                "The daemon did not answer",
+                format!("It was still starting after {} seconds, and {how}.", START_LIMIT.as_secs()),
+                Some(&log),
+            ));
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    note(format!("the daemon answered after {:.1}s", began.elapsed().as_secs_f32()));
+    if let Ok(mut slot) = shell.daemon.lock() {
+        *slot = Some(daemon);
+    }
+    Ok(true)
+}
+
+/// The port's answer, asked again when it is "something else": an openmirror
+/// busy with something heavy can be slow to say what it is.
+fn settle(port: u16) -> Probe {
+    let mut answer = daemon::probe(port);
+    for _ in 0..3 {
+        if !matches!(answer, Probe::Other(_)) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(700));
+        answer = daemon::probe(port);
+    }
+    answer
+}
+
+/// Keep an eye on the daemon, so that one which goes away takes the window
+/// back to a page that says so, rather than leaving an interface that has
+/// quietly stopped answering. A daemon of our own is watched through its
+/// process; one we attached to only through its port — a bare connect, which
+/// leaves no line in somebody else's log.
+fn watch(app: &AppHandle, owned: bool) {
+    let shell = app.state::<Shell>();
+    let mut misses = 0;
+    loop {
+        thread::sleep(Duration::from_secs(if owned { 1 } else { 3 }));
+        if shell.quitting.load(Ordering::SeqCst) {
+            return;
+        }
+        let status = if owned {
+            let exited = match shell.daemon.lock() {
+                Ok(mut slot) => match slot.as_mut().map(Daemon::exited) {
+                    None => return,
+                    Some(None) => None,
+                    Some(Some(status)) => {
+                        *slot = None;
+                        Some(status)
+                    }
+                },
+                Err(_) => return,
+            };
+            let Some(status) = exited else { continue };
+            Status::failed(
+                "The daemon stopped",
+                format!("It exited ({status}) while the app was open. The end of its log is below."),
+                Some(&shell.daemon_log()),
+            )
+        } else {
+            misses = if daemon::listening(shell.port) { 0 } else { misses + 1 };
+            if misses < 2 {
+                continue;
             }
-            Err(err) => eprintln!("openmirror: could not start {program}: {err}"),
+            Status::failed(
+                "The daemon stopped",
+                "It was started outside this app, so its log is wherever that was. Try again starts one of the \
+                 app's own.",
+                None,
+            )
+        };
+        if shell.quitting.load(Ordering::SeqCst) {
+            return;
         }
+        note(format!("{}: {}", status.title, status.detail));
+        shell.set(status);
+        show(app, &loading_url());
+        return;
     }
-    None
 }
 
-fn wait_until_up(url: &str, limit: Duration) -> bool {
-    let deadline = Instant::now() + limit;
-    while Instant::now() < deadline {
-        if daemon_is_up(url) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(200));
+/// Only ours. A daemon this app attached to keeps running, along with
+/// whatever sessions it is holding.
+fn stop_ours(app: &AppHandle) {
+    let Some(shell) = app.try_state::<Shell>() else { return };
+    shell.quitting.store(true, Ordering::SeqCst);
+    let ours = shell.daemon.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(daemon) = ours {
+        note("stopping the daemon this app started");
+        let how = daemon.stop(STOP_GRACE);
+        note(format!("the daemon {how}"));
     }
-    false
+}
+
+/// Talk and Live ask for the microphone in the daemon's page, and each
+/// platform's webview answers differently. On macOS wry grants it and the
+/// system asks you, once; on Windows, WebView2 asks with a prompt of its own.
+/// On Linux nobody answers, and WebKitGTK's answer to a request nobody
+/// answers is no — so voice heard nothing, with no error anywhere to say why.
+/// Measured with WebKit's mock devices: `getUserMedia` was refused until this
+/// answered, then granted. The microphone goes to the daemon's page and to
+/// nothing else.
+#[cfg(target_os = "linux")]
+fn allow_microphone(window: &tauri::WebviewWindow, port: u16) -> tauri::Result<()> {
+    let daemon = daemon_url(port).to_string();
+    window.with_webview(move |webview| {
+        use webkit2gtk::glib::prelude::*;
+        use webkit2gtk::{PermissionRequestExt, SettingsExt, UserMediaPermissionRequest, WebViewExt};
+
+        let view = webview.inner();
+        if let Some(settings) = WebViewExt::settings(&view) {
+            // On by default in current WebKitGTK; said anyway, for older ones.
+            settings.set_enable_media_stream(true);
+        }
+        view.connect_permission_request(move |view, request| {
+            let ours = view.uri().is_some_and(|uri| uri.starts_with(daemon.as_str()));
+            if ours && request.is::<UserMediaPermissionRequest>() {
+                request.allow();
+                return true;
+            }
+            // Not answered here, so WebKit's own answer: no.
+            false
+        });
+    })
+}
+
+/// Studio's "download" is a link with a `download` attribute. A browser saves
+/// it; a webview does whatever its platform does, which on macOS is nothing
+/// at all. So the app saves it where a browser would — the Downloads folder,
+/// under a name that overwrites nothing — and says where it went.
+fn download(app: &AppHandle, event: DownloadEvent<'_>) -> bool {
+    match event {
+        DownloadEvent::Requested { url, destination } => {
+            let Ok(dir) = app.path().download_dir() else { return true };
+            let name = destination
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .filter(|name| !name.is_empty())
+                .or_else(|| url.path_segments().and_then(|mut s| s.next_back()).map(str::to_string))
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "download".into());
+            *destination = unique(&dir, &name);
+            note(format!("saving {url} to {}", destination.display()));
+        }
+        DownloadEvent::Finished { url, path, success } => {
+            let body = match (&path, success) {
+                (Some(path), true) => format!("Saved {}", path.display()),
+                _ => format!("Could not save {url}"),
+            };
+            note(&body);
+            let _ = app.notification().builder().title("openmirror").body(body).show();
+        }
+        _ => {}
+    }
+    true
+}
+
+/// `dir/name`, or `dir/name (1)`, `(2)`… — the first that does not exist.
+fn unique(dir: &Path, name: &str) -> PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, format!(".{ext}")),
+        _ => (name, String::new()),
+    };
+    (1..)
+        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
+        .find(|path| !path.exists())
+        .expect("some name is free")
+}
+
+#[tauri::command]
+fn status(shell: State<'_, Shell>) -> Status {
+    shell.status.lock().map(|s| s.clone()).unwrap_or_else(|e| e.into_inner().clone())
+}
+
+#[tauri::command]
+fn retry(app: AppHandle) {
+    thread::spawn(move || start(&app));
+}
+
+#[tauri::command]
+fn open_logs(app: AppHandle, shell: State<'_, Shell>) {
+    open_logs_folder(&app, &shell);
+}
+
+fn open_logs_folder(app: &AppHandle, shell: &Shell) {
+    let dir = shell.home.logs();
+    if let Err(e) = app.opener().open_path(dir.to_string_lossy(), None::<&str>) {
+        note(format!("could not open {}: {e}", dir.display()));
+    }
 }
 
 fn main() {
-    let url = base_url();
-
-    // Attach if one is already running; only start one if not. This is what
-    // lets the app coexist with a systemd-managed daemon.
-    let owned = if daemon_is_up(&url) {
-        eprintln!("openmirror: attaching to the daemon already on {url}");
-        None
-    } else {
-        spawn_daemon()
-    };
+    BEGAN.get_or_init(Instant::now);
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+        // First, so that a second launch hands over to this one and leaves
+        // before it has started anything: one tray icon, one daemon.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| raise(app)))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(Daemon(Mutex::new(owned)))
-        .setup(move |app| {
+        .invoke_handler(tauri::generate_handler![status, retry, open_logs])
+        .setup(|app| {
+            let home = Home::new(app.path().home_dir()?);
+            std::fs::create_dir_all(home.logs())?;
+            if let Ok(file) = daemon::open_log(&home.logs().join("desktop.log")) {
+                let _ = LOG.set(Mutex::new(file));
+            }
+            let settings = Settings::load(&home);
+            let port = settings.port();
+            note(format!("openmirror desktop {}; daemon port {port}", env!("CARGO_PKG_VERSION")));
+
+            app.manage(Shell {
+                home,
+                settings,
+                port,
+                status: Mutex::new(Status::starting("Looking for the daemon.")),
+                daemon: Mutex::new(None),
+                starting: AtomicBool::new(false),
+                quitting: AtomicBool::new(false),
+            });
+
+            // The one thing the daemon's page may ask of the app: a
+            // notification. Granted to that origin alone, and at run time
+            // because the port is only known now.
+            app.add_capability(
+                CapabilityBuilder::new("daemon-page")
+                    .remote(format!("http://127.0.0.1:{port}"))
+                    .window("main")
+                    .permission("notification:allow-is-permission-granted")
+                    .permission("notification:allow-request-permission")
+                    .permission("notification:allow-notify"),
+            )?;
+
             let transparent = std::env::var("OPENMIRROR_TRANSPARENT")
                 .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
                 .unwrap_or(false);
 
-            if !wait_until_up(&url, Duration::from_secs(30)) {
-                eprintln!("openmirror: the daemon did not come up on {url}");
-            }
-
-            let window = WebviewWindowBuilder::new(
-                app,
-                "main",
-                WebviewUrl::External(url.parse().expect("bad daemon url")),
-            )
-            .title("openmirror")
-            .inner_size(1200.0, 820.0)
-            .min_inner_size(720.0, 520.0)
-            // Transparency lets the page's own glass blur the real desktop
-            // rather than a background it painted itself. It is opt-in because
-            // it depends entirely on the compositor: on COSMIC/Wayland a
-            // transparent window did not map at all, which is indistinguishable
-            // from the app failing to start. Off by default, so the window
-            // always appears; on for anyone whose compositor handles it.
-            .transparent(transparent)
-            .decorations(true)
-            .build()
-            .inspect_err(|e| eprintln!("openmirror: window build failed: {e}"))?;
-            let _ = window.show();
+            let navigating = app.handle().clone();
+            let opening = app.handle().clone();
+            let saving = app.handle().clone();
+            let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                .title("openmirror")
+                .inner_size(1200.0, 820.0)
+                .min_inner_size(720.0, 520.0)
+                // Transparency lets the page's own glass blur the real desktop
+                // rather than a background it painted itself. It is opt-in
+                // because it depends entirely on the compositor: on
+                // COSMIC/Wayland a transparent window did not map at all, which
+                // is indistinguishable from the app failing to start.
+                .transparent(transparent)
+                .on_navigation(move |url| {
+                    if belongs_here(url, port) {
+                        return true;
+                    }
+                    elsewhere(&navigating, url);
+                    false
+                })
+                .on_new_window(move |url, _| {
+                    elsewhere(&opening, &url);
+                    NewWindowResponse::Deny
+                })
+                .on_download(move |_, event| download(&saving, event));
             if transparent {
-                // Told, not sniffed: the page cannot see the window's own
-                // transparency, and dropping its background without it would
-                // leave the interface floating on nothing.
-                let _ = window.eval("document.body.classList.add('native')");
+                // Told, not sniffed: whether transparency worked is up to the
+                // compositor, which the page cannot see, and a page dropping
+                // its background without it would float on nothing.
+                builder = builder.initialization_script(
+                    "document.addEventListener('DOMContentLoaded', () => document.body.classList.add('native'))",
+                );
             }
+            let window = builder.build()?;
+
+            #[cfg(target_os = "linux")]
+            allow_microphone(&window, port)?;
 
             // Closing the window hides it rather than quitting. An agent
-            // mid-build should not be stopped by someone tidying their desktop;
-            // Quit in the tray is the way out.
+            // mid-build should not be stopped by someone tidying their
+            // desktop; Quit in the tray is the way out.
             let hidden = window.clone();
             window.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     let _ = hidden.hide();
                 }
             });
 
-            let show = MenuItem::with_id(app, "show", "Show openmirror", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let show_item = MenuItem::with_id(app, "show", "Show openmirror", true, None::<&str>)?;
+            let logs_item = MenuItem::with_id(app, "logs", "Open the logs folder", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit openmirror", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &logs_item, &quit_item])?;
+            let icon = app.default_window_icon().cloned().ok_or("the app has no icon")?;
 
             TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(icon)
                 .tooltip("openmirror")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    }
+                    "show" => raise(app),
+                    "logs" => open_logs_folder(app, &app.state::<Shell>()),
                     "quit" => app.exit(0),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     // Left click raises the window, which is what every tray
                     // application does and what people expect without being told.
-                    if let tauri::tray::TrayIconEvent::Click {
-                        button: tauri::tray::MouseButton::Left,
-                        button_state: tauri::tray::MouseButtonState::Up,
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
                         ..
                     } = event
                     {
-                        if let Some(w) = tray.app_handle().get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                        raise(tray.app_handle());
                     }
                 })
-                .build(app)
-                .inspect_err(|e| eprintln!("openmirror: tray build failed: {e}"))?;
+                .build(app)?;
 
+            let handle = app.handle().clone();
+            thread::spawn(move || start(&handle));
             Ok(())
         })
-        .on_window_event(|_window, _event| {})
         .build(tauri::generate_context!())
-        .expect("failed to build the openmirror shell")
-        .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                // Only ours. A daemon this process did not start keeps running,
-                // along with whatever sessions it is holding.
-                if let Some(state) = app.try_state::<Daemon>() {
-                    if let Ok(mut guard) = state.0.lock() {
-                        if let Some(child) = guard.as_mut() {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                        }
-                    }
-                }
-            }
+        .expect("failed to build the openmirror app")
+        .run(|app, event| match event {
+            RunEvent::Exit => stop_ours(app),
+            // The Dock icon, clicked while the window is hidden: every Mac
+            // app shows its window again, and a hidden one with no other way
+            // back than the menu bar would look like it had not opened.
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { .. } => raise(app),
+            _ => {}
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_loading_page_and_the_daemon_stay_in_the_window() {
+        let here = |url: &str| belongs_here(&url.parse().unwrap(), 8477);
+        assert!(here("tauri://localhost/index.html"));
+        assert!(here("http://tauri.localhost/index.html"));
+        assert!(here("http://127.0.0.1:8477/"));
+        assert!(here("http://localhost:8477/static/app.js"));
+        assert!(here("about:blank"));
+
+        assert!(!here("http://127.0.0.1:9000/"), "another port is another server");
+        assert!(!here("https://127.0.0.1:8477/"), "the daemon does not serve https");
+        assert!(!here("https://github.com/notquiteog/openmirror"));
+        assert!(!here("file:///etc/passwd"));
+        assert!(!here("data:text/html,<h1>hi</h1>"));
+    }
+
+    #[test]
+    fn a_download_never_overwrites() {
+        let dir = std::env::temp_dir().join(format!("openmirror-unique-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(unique(&dir, "cat.png"), dir.join("cat.png"));
+        std::fs::write(dir.join("cat.png"), b"").unwrap();
+        assert_eq!(unique(&dir, "cat.png"), dir.join("cat (1).png"));
+        std::fs::write(dir.join("cat (1).png"), b"").unwrap();
+        assert_eq!(unique(&dir, "cat.png"), dir.join("cat (2).png"));
+        std::fs::write(dir.join("notes"), b"").unwrap();
+        assert_eq!(unique(&dir, "notes"), dir.join("notes (1)"));
+        std::fs::write(dir.join(".env"), b"").unwrap();
+        assert_eq!(unique(&dir, ".env"), dir.join(".env (1)"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

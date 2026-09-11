@@ -82,6 +82,7 @@ from openmirror.providers.base import (
     ToolSpec,
     ToolUseBlock,
 )
+from openmirror.providers.reasoning import normalise
 
 log = logging.getLogger(__name__)
 
@@ -115,6 +116,8 @@ REPEAT_STOP = 6
 COMMANDS = {
     'compact': 'Summarise the conversation so far to make room. Anything after it says what to keep.',
     'clear': 'Forget the conversation and start again, in the same session and folder.',
+    'think': 'How hard the model thinks from now on: off, low, medium, high, xhigh, max, or default. '
+             'On its own, says what it is now.',
 }
 
 _SLASH = re.compile(r'/([A-Za-z0-9_:-]+)(?:\s+(.*))?$', re.S)
@@ -213,6 +216,7 @@ class AgentSession:
         provider: Any,
         model: str,
         tools: list[Tool],
+        effort: str | None = None,
         policy: ApprovalPolicy | None = None,
         system_prompt: str = '',
         max_steps: int = MAX_STEPS,
@@ -251,6 +255,10 @@ class AgentSession:
         self.stage = stage
         self.provider = provider
         self.model = model
+        # How hard the model thinks: off … max, or None for its own default.
+        # One level for every provider — each adapter spells it the way its
+        # host accepts — so switching provider keeps the setting's meaning.
+        self.effort = normalise(effort)
         self.policy = policy or ApprovalPolicy()
         self.system_prompt = system_prompt
         self.max_steps = max_steps
@@ -351,6 +359,7 @@ class AgentSession:
                 session_id=self.id,
                 cwd=str(self.cwd),
                 model=self.model,
+                effort=self.effort,
                 policy=self.policy.describe() + ('' if self.confined else '  ·  UNCONFINED: the whole filesystem'),
                 tools=sorted(self.tools),
             )
@@ -571,7 +580,30 @@ class AgentSession:
         if new is Mode.PLAN and self.policy.mode is not Mode.PLAN:
             self.policy.previous = self.policy.mode
         self.policy.mode = new
-        await self._emit(PolicyChanged(session_id=self.id, mode=new.value, policy=self.policy.describe()))
+        await self._emit(PolicyChanged(
+            session_id=self.id, mode=new.value, policy=self.policy.describe(), effort=self.effort,
+        ))
+
+    async def set_effort(self, level: str | None) -> None:
+        """Change how hard the model thinks, from the next request on.
+
+        A live control for the same reason the approval mode is: whether a
+        problem deserves deliberation is something you find out while watching
+        the model work on it. ``default`` or an empty value hands it back to
+        the model; anything that is not a level is refused rather than guessed.
+        Announced through the event log so every attached client sees it.
+        """
+        raw = (level or '').strip().lower()
+        if raw in ('', 'default', 'auto'):
+            self.effort = None
+        else:
+            chosen = normalise(raw)
+            if chosen is None:
+                raise ValueError(f'not a thinking level: {level!r} — use off, low, medium, high, xhigh, max or default')
+            self.effort = chosen
+        await self._emit(PolicyChanged(
+            session_id=self.id, mode=self.policy.mode.value, policy=self.policy.describe(), effort=self.effort,
+        ))
 
     # -- the loop -----------------------------------------------------------
 
@@ -724,6 +756,7 @@ class AgentSession:
             model=self.model,
             messages=self.messages,
             system=system or None,
+            effort=self.effort,
             tools=[
                 ToolSpec(name=t.name, description=t.description, input_schema=t.input_schema)
                 for t in self._visible_tools()
@@ -1069,6 +1102,7 @@ class AgentSession:
                 todo=todo_text,
             ))])],
             system=prompt_mod.COMPACT_SYSTEM,
+            effort=self.effort,
         )
         parts: list[str] = []
         async for event in self.provider.stream(request):
@@ -1133,6 +1167,13 @@ class AgentSession:
                     session_id=self.id, turn_id=turn_id, reason='cleared',
                     messages_before=before, messages_after=0,
                 ))
+            elif name == 'think':
+                if arguments:
+                    # ValueError for a word that is not a level lands in the
+                    # handler below and is shown as the command failing.
+                    await self.set_effort(arguments.split()[0])
+                now = self.effort or "the model's own default"
+                await self._emit(TextDelta(session_id=self.id, turn_id=turn_id, text=f'Thinking: {now}.'))
         except asyncio.CancelledError:
             await self._emit(TurnCompleted(session_id=self.id, turn_id=turn_id, stop_reason='interrupted'))
             raise
@@ -1167,6 +1208,8 @@ class AgentSession:
             provider=self.provider,
             model=kind.model or self.model,
             tools=child_tools(kind, self.tools),
+            # A subagent thinks as hard as the session that started it.
+            effort=self.effort,
             policy=policy,
             system_prompt=prompt_mod.build_agent(kind, self.root, confined=self.confined, extra=self.project_context),
             max_steps=self.max_steps,

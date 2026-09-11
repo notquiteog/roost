@@ -19,6 +19,7 @@ from openmirror.agent.approval import Mode
 from openmirror.agent.manager import manager
 from openmirror.config import config
 from openmirror.providers.base import Modality
+from openmirror.providers.reasoning import normalise
 from openmirror.providers.registry import NoProviderError, Route, RouteSet, pick_model, registry
 from openmirror.routers import media as media_router
 from openmirror.routers import memory as memory_router
@@ -69,10 +70,20 @@ class CreateSession(BaseModel):
     # only the browser tools, finished in twenty-six seconds. Group names are
     # in `runtime.TOOLSETS`; an unrecognised entry is taken as a tool name.
     tools: list[str] = []
+    # How hard the model thinks: off, low, medium, high, xhigh, max — or
+    # empty for the model's own default. Changeable later with `policy.set`
+    # or `/think`, because whether a problem deserves it is learned mid-run.
+    effort: str | None = None
 
 
 @http.post('')
 async def create_session(body: CreateSession) -> dict[str, object]:
+    # Refused rather than dropped: a level that is not one would otherwise
+    # become "the model's default" in silence, and look like it was accepted.
+    effort = normalise(body.effort) if body.effort not in (None, '', 'default') else None
+    if body.effort not in (None, '', 'default') and effort is None:
+        raise HTTPException(status_code=400, detail=f'not a thinking level: {body.effort!r}')
+
     try:
         impl, model, provider_id = await _resolve_chat(body.provider, body.model)
     except NoProviderError as exc:
@@ -83,6 +94,7 @@ async def create_session(body: CreateSession) -> dict[str, object]:
             root=body.root or config.workspace,
             provider=impl,
             model=model,
+            effort=effort,
             mode=Mode(body.mode or config.approval_mode),
             title=body.title,
             memory=memory_router.service,
@@ -101,6 +113,7 @@ async def create_session(body: CreateSession) -> dict[str, object]:
         'provider': provider_id,
         'policy': session.policy.describe(),
         'tools': sorted(session.tools),
+        'effort': session.effort,
     }
 
 
@@ -275,16 +288,27 @@ async def agent_socket(
                 # The confirmation comes back through the session's own log
                 # rather than as a reply on this socket, so every client
                 # attached to the session sees the change, and a replay does.
-                try:
-                    await agent.set_mode(command.get('mode', ''))
-                except ValueError:
-                    await ws.send_json({
-                        'type': 'error',
-                        'message': f'unknown approval mode: {command.get("mode")!r}',
-                        'retryable': False,
-                    })
-                else:
-                    log.info('session %s: approval mode set to %s', agent.id, agent.policy.mode.value)
+                #
+                # Either control may come alone; the thinking level is the
+                # other live one, for the same reason.
+                if command.get('mode'):
+                    try:
+                        await agent.set_mode(command.get('mode', ''))
+                    except ValueError:
+                        await ws.send_json({
+                            'type': 'error',
+                            'message': f'unknown approval mode: {command.get("mode")!r}',
+                            'retryable': False,
+                        })
+                    else:
+                        log.info('session %s: approval mode set to %s', agent.id, agent.policy.mode.value)
+                if 'effort' in command:
+                    try:
+                        await agent.set_effort(command.get('effort'))
+                    except ValueError as exc:
+                        await ws.send_json({'type': 'error', 'message': str(exc), 'retryable': False})
+                    else:
+                        log.info('session %s: thinking set to %s', agent.id, agent.effort or 'default')
             elif kind == 'task.stop':
                 task_id = str(command.get('task_id', ''))
                 if agent.tasks is None or agent.tasks.get(task_id) is None:

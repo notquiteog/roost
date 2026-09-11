@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -47,6 +48,13 @@ from openmirror.providers.base import (
     refused,
 )
 from openmirror.providers.control_tokens import strip_control_tokens
+from openmirror.providers.reasoning import (
+    TRANSLATED_EXTRAS,
+    openai_compat_reasoning,
+    openai_max_tokens_field,
+    openai_takes_sampling,
+    request_level,
+)
 
 log = logging.getLogger(__name__)
 
@@ -120,6 +128,17 @@ def _to_openai_messages(messages: list[Message], system: str | None) -> list[dic
     return out
 
 
+def _stt_form(audio: bytes, model: str, language: str | None) -> aiohttp.FormData:
+    """One transcription request's form. A fresh one per send: aiohttp consumes a FormData."""
+    form = aiohttp.FormData()
+    form.add_field('file', audio, filename='audio.wav', content_type='audio/wav')
+    form.add_field('model', model)
+    if language:
+        form.add_field('language', language)
+    form.add_field('response_format', 'json')
+    return form
+
+
 class OpenAICompatProvider(ChatProvider, EmbeddingProvider, STTProvider, TTSProvider, ImageProvider):
     def __init__(
         self,
@@ -163,12 +182,22 @@ class OpenAICompatProvider(ChatProvider, EmbeddingProvider, STTProvider, TTSProv
         }
         # Omitted entirely when uncapped, which is this API's own way of saying
         # "up to the model's limit". A large stand-in would be a ceiling by
-        # another name, and the wrong one on most models.
+        # another name, and the wrong one on most models. OpenAI itself wants
+        # the newer field name on its reasoning models and refuses the older.
         if req.max_tokens:
             payload['max_tokens'] = req.max_tokens
-        if req.temperature is not None:
+            # Written under its common name first so the ceiling scan in
+            # tests/test_ceiling.py can see this adapter at all, then renamed
+            # where the host wants the newer one.
+            field = openai_max_tokens_field(self.base_url)
+            if field != 'max_tokens':
+                payload[field] = payload.pop('max_tokens')
+        # OpenAI's reasoning models refuse temperature and `stop` with a 400
+        # rather than ignoring them, so they go only where they are taken.
+        tunable = openai_takes_sampling(req.model)
+        if req.temperature is not None and tunable:
             payload['temperature'] = req.temperature
-        if req.stop:
+        if req.stop and tunable:
             payload['stop'] = req.stop
         if req.tools:
             payload['tools'] = [
@@ -178,7 +207,16 @@ class OpenAICompatProvider(ChatProvider, EmbeddingProvider, STTProvider, TTSProv
                 }
                 for t in req.tools
             ]
-        payload.update(req.extra)
+        # How hard to think, in this host's own spelling — OpenAI's per-model
+        # ladder, Groq's per-model set, OpenRouter's nesting, SiliconFlow's and
+        # Alibaba's switch and budget — and nothing at all where it would be
+        # refused. See openmirror.providers.reasoning.
+        payload.update(openai_compat_reasoning(request_level(req.effort, req.extra), req.model, self.base_url))
+        # The escape hatch, minus the keys translated above. `think` is
+        # Ollama's spelling: splatted into an OpenAI-shaped body it is an
+        # unknown parameter, which OpenAI itself answers with a 400 — so the
+        # voice path, which sends think: False, failed outright there.
+        payload.update({k: v for k, v in req.extra.items() if k not in TRANSLATED_EXTRAS})
 
         # Tool arguments arrive as partial JSON keyed by index, not by id, so
         # they are accumulated here and parsed once the stream ends.
@@ -309,19 +347,25 @@ class OpenAICompatProvider(ChatProvider, EmbeddingProvider, STTProvider, TTSProv
         return False
 
     async def transcribe(self, audio: bytes, *, model: str, language: str | None = None) -> Transcript:
-        form = aiohttp.FormData()
-        form.add_field('file', audio, filename='audio.wav', content_type='audio/wav')
-        form.add_field('model', model)
-        if language:
-            form.add_field('language', language)
-        form.add_field('response_format', 'json')
+        form = _stt_form(audio, model, language)
 
         headers = {k: v for k, v in self._headers().items() if k != 'Content-Type'}
         async with self._session() as session:
             async with session.post(f'{self.base_url}/audio/transcriptions', data=form, headers=headers) as resp:
-                if resp.status != 200:
-                    raise RuntimeError(f'{self.provider_id} stt: HTTP {resp.status}: {(await resp.text())[:300]}')
-                body = await resp.json()
+                status = resp.status
+                body = await resp.json() if status == 200 else None
+                detail = '' if status == 200 else (await resp.text())[:300]
+            # whisper.cpp's own server answers on `/inference` unless it was
+            # started with `--inference-path`, which Perch does and a release
+            # binary on another box does not. Same form, same `{text}` back.
+            if status == 404:
+                root = re.sub(r'/v1$', '', self.base_url)
+                async with session.post(f'{root}/inference', data=_stt_form(audio, model, language), headers=headers) as resp:
+                    status = resp.status
+                    body = await resp.json() if status == 200 else None
+                    detail = '' if status == 200 else (await resp.text())[:300]
+        if status != 200 or body is None:
+            raise RuntimeError(f'{self.provider_id} stt: HTTP {status}: {detail}')
         return Transcript(text=(body.get('text') or '').strip(), partial=False, language=language)
 
     # -- text to speech -----------------------------------------------------

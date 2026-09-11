@@ -46,6 +46,7 @@ class SessionManager:
         provider: Any,
         model: str,
         mode: Mode | str,
+        effort: str | None = None,
         session_id: str | None = None,
         title: str = '',
         memory: Any = None,
@@ -119,7 +120,7 @@ class SessionManager:
             lsp = find_servers(cfg.lsp_config) or None
 
         session = build_session(
-            root=root, provider=provider, model=model, mode=mode, session_id=session_id,
+            root=root, provider=provider, model=model, mode=mode, effort=effort, session_id=session_id,
             title=title or Path(root).name, memory=memory, user_id=user_id,
             confined=not cfg.unconfined,
             allow_purchases=cfg.allow_purchases,

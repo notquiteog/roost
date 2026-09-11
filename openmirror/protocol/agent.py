@@ -126,6 +126,9 @@ class SessionStarted(_Event):
     # so plainly rather than surprising someone on the first tool call.
     policy: str
     tools: list[str] = Field(default_factory=list)
+    # How hard the model thinks: off … max, or None for the model's own
+    # default. Beside the policy because it is the other live control.
+    effort: str | None = None
 
 
 class TurnStarted(_Event):
@@ -233,6 +236,9 @@ class PolicyChanged(_Event):
     mode: str
     # The same thing spelled out, which is what the session banner shows.
     policy: str = ''
+    # The thinking level, carried on every change of either control so a
+    # client never has to remember one to render the other.
+    effort: str | None = None
 
 
 class TaskUpdated(_Event):
@@ -331,7 +337,9 @@ class SetPolicy(BaseModel):
     """
 
     type: Literal['policy.set'] = 'policy.set'
-    mode: str
+    # Either or both. `effort` is off … max, or 'default' for the model's own.
+    mode: str | None = None
+    effort: str | None = None
 
 
 class StopTask(BaseModel):

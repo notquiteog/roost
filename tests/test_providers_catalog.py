@@ -160,9 +160,16 @@ def test_google_serves_media_from_a_different_adapter_than_embeddings():
     `:predictLongRunning` are not the same API and must not be one object."""
     from openmirror.providers.google import GoogleProvider
     from openmirror.providers.google_media import GoogleMediaProvider
+    from openmirror.providers.openai_compat import OpenAICompatProvider
 
     _, impls = connections.build(connections.from_host('google'))
-    assert set(impls) == {Modality.EMBEDDING, Modality.IMAGE, Modality.VIDEO}
+    # Chat too, which the catalogue always offered for this host and `build`
+    # used to narrow away in silence — a Gemini connection could embed and
+    # draw but not be talked to. It goes through Google's OpenAI-compatible
+    # endpoint under the same base URL, a fourth shape on the same key.
+    assert set(impls) == {Modality.CHAT, Modality.EMBEDDING, Modality.IMAGE, Modality.VIDEO}
+    assert isinstance(impls[Modality.CHAT], OpenAICompatProvider)
+    assert impls[Modality.CHAT].base_url.endswith('/v1beta/openai')
     assert isinstance(impls[Modality.EMBEDDING], GoogleProvider)
     assert isinstance(impls[Modality.IMAGE], GoogleMediaProvider)
     # Image and video are two instances, not one: they hit different endpoints

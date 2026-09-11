@@ -110,9 +110,15 @@ def test_the_adapter_never_writes_a_disabled_thinking_type():
     # behaviour: `{'type': 'disabled'}` is the obvious way to honour a
     # think: False, and it is the one that breaks tool calling silently. If it
     # ever has to change, it should have to change here too.
-    src = Path(__file__).resolve().parents[1] / 'openmirror' / 'providers' / 'anthropic.py'
-    assert len(src.read_text(encoding='utf-8')) > 500, 'the adapter source was not read properly'
-    literals = _code_strings(src)
+    # Both files: the per-family rules moved into `reasoning.py`, and a guard
+    # that went on scanning only the adapter would have kept passing while the
+    # thing it guards against was written one file over.
+    root = Path(__file__).resolve().parents[1] / 'openmirror' / 'providers'
+    literals: list[str] = []
+    for name in ('anthropic.py', 'reasoning.py'):
+        src = root / name
+        assert len(src.read_text(encoding='utf-8')) > 500, f'{name} was not read properly'
+        literals += _code_strings(src)
 
     assert 'disabled' not in literals, (
         "the adapter sets thinking type 'disabled', which makes the model write "

@@ -33,6 +33,7 @@ from openmirror.providers.base import (
     refused,
 )
 from openmirror.providers.control_tokens import strip_control_tokens
+from openmirror.providers.reasoning import ollama_think
 
 log = logging.getLogger(__name__)
 
@@ -150,7 +151,14 @@ class OllamaProvider(ChatProvider, EmbeddingProvider):
                 }
                 for t in req.tools
             ]
-        payload.update(req.extra)
+        # How hard to think, in Ollama's spelling — unless the caller said
+        # `think` itself in `extra`, which the voice path does and which is
+        # already this API's own field. None leaves the model at its default.
+        if 'think' not in req.extra:
+            think = ollama_think(req.effort, req.model)
+            if think is not None:
+                payload['think'] = think
+        payload.update({k: v for k, v in req.extra.items() if k != 'effort'})
 
         usage: dict[str, int] = {}
         stop_reason = 'end_turn'

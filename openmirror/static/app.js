@@ -947,14 +947,22 @@ function handleAgentEvent(ev) {
       // same facts, so repeating the model here would only crowd the title.
       $('#session-meta').textContent = ev.policy;
       $('#mode-wrap').title = ev.policy;
-      dressChips({ model: ev.model, root: ev.cwd });
+      dressChips({ model: ev.model, root: ev.cwd, effort: ev.effort ?? null });
       break;
 
-    case 'policy.changed':
+    case 'policy.changed': {
+      // One event for both live controls, so say only what actually moved —
+      // a thinking change announced as "Approval is now: ask first" would be
+      // a true sentence about the wrong thing.
+      const before = state.info || {};
       $('#mode').value = ev.mode;
-      dressChips({ policy: ev.mode });
-      notice(`Approval is now: ${ev.policy || ev.mode}.`);
+      if (before.policy !== ev.mode) notice(`Approval is now: ${ev.policy || ev.mode}.`);
+      if ((before.effort ?? null) !== (ev.effort ?? null)) {
+        notice(`Thinking is now: ${ev.effort || "the model's own default"}.`);
+      }
+      dressChips({ policy: ev.mode, effort: ev.effort ?? null });
       break;
+    }
 
     case 'turn.started':
       state.turnNode = null;
@@ -1565,6 +1573,11 @@ function dressChips(patch) {
 
   $('#mode-wrap').hidden = false;
   if (info.policy) $('#mode').value = info.policy;
+  const effortWrap = $('#effort-wrap');
+  if (effortWrap) {
+    effortWrap.hidden = false;
+    if ('effort' in info) $('#effort').value = info.effort || '';
+  }
 
   const root = $('#root-chip');
   if (info.root) {
@@ -1676,6 +1689,19 @@ function selectSession(id) {
   loadSessions();
 }
 
+/* The thinking level a new session starts at: the last one chosen, on this
+   browser. Per viewer and best-effort — storage can be missing entirely —
+   because the session itself is where the level really lives. */
+function preferredEffort() {
+  try { return localStorage.getItem('openmirror.effort') || null; } catch { return null; }
+}
+function rememberEffort(value) {
+  try {
+    if (value) localStorage.setItem('openmirror.effort', value);
+    else localStorage.removeItem('openmirror.effort');
+  } catch { /* storage unavailable: the session still has its level */ }
+}
+
 async function createSession(form) {
   const body = {
     root: form.root.value.trim() || null,
@@ -1683,6 +1709,7 @@ async function createSession(form) {
     provider: form.provider.value || null,
     mode: form.mode.value,
     tools: form.tools.value ? form.tools.value.split(',') : [],
+    effort: preferredEffort(),
   };
   const res = await api('/api/sessions', {
     method: 'POST',
@@ -1773,6 +1800,38 @@ function wire() {
   $('#mode').onchange = (e) => {
     if (!state.sessionId) return;
     send({ type: 'policy.set', mode: e.target.value });
+  };
+
+  // How hard the model thinks — beside the approval mode because it is the
+  // other live control, and for the same reason: whether a problem deserves
+  // deliberation is learned while watching the model work on it. Built here
+  // rather than in the page's markup; the levels are the six the server
+  // takes, plus "default", which hands the choice back to the model. `/think`
+  // in the composer does the same from the keyboard.
+  const effortWrap = document.createElement('label');
+  effortWrap.id = 'effort-wrap';
+  effortWrap.className = 'chip';
+  effortWrap.hidden = true;
+  effortWrap.title = 'How hard the model thinks before answering. xhigh and max only differ on frontier '
+    + 'models; a smaller model uses its hardest setting instead.';
+  const effortSelect = document.createElement('select');
+  effortSelect.id = 'effort';
+  for (const [value, label] of [
+    ['', 'think: default'], ['off', 'think: off'], ['low', 'think: low'], ['medium', 'think: medium'],
+    ['high', 'think: high'], ['xhigh', 'think: xhigh'], ['max', 'think: max'],
+  ]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    effortSelect.append(option);
+  }
+  effortWrap.append(effortSelect);
+  $('#mode-wrap').after(effortWrap);
+  effortSelect.value = preferredEffort() || '';
+  effortSelect.onchange = (e) => {
+    rememberEffort(e.target.value);
+    if (!state.sessionId) return;
+    send({ type: 'policy.set', effort: e.target.value || 'default' });
   };
 
   // The provider list is long on a well-configured machine and irrelevant

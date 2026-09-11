@@ -159,6 +159,8 @@ def build_session(
     provider: Any,
     model: str,
     mode: Mode | str = Mode.ASK,
+    # How hard the model thinks: off … max, or None for its own default.
+    effort: str | None = None,
     tools: list[Tool] | None = None,
     session_id: str | None = None,
     env: dict[str, str] | None = None,
@@ -316,6 +318,7 @@ def build_session(
         root=root_path,
         provider=provider,
         model=model,
+        effort=effort,
         tools=chosen,
         policy=policy,
         system_prompt=prompt_mod.build(

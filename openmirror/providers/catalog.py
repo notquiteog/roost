@@ -147,6 +147,43 @@ HOSTS: tuple[Host, ...] = (
         modalities=CHAT_AND_EMBED,
     ),
     Host(
+        id='siliconflow',
+        label='SiliconFlow',
+        adapter='openai',
+        base_url='https://api.siliconflow.com/v1',
+        env_key='SILICONFLOW_API_KEY',
+        modalities=CHAT_AND_EMBED,
+        note='Open-weight models hosted — Qwen3, DeepSeek, GLM, Kimi — and the Qwen3 embedders at '
+             'full width. Thinking here is a switch and a token budget rather than a level, which '
+             'openmirror translates. A mainland-China account uses https://api.siliconflow.cn/v1; its '
+             'keys are not accepted on the .com site.',
+    ),
+    Host(
+        id='alibaba',
+        label='Alibaba Cloud (Qwen)',
+        adapter='openai',
+        # Model Studio's OpenAI-compatible mode. The console now hands out
+        # per-workspace addresses under maas.aliyuncs.com; the regional ones
+        # still answer, and either kind works here.
+        base_url='https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+        env_key='DASHSCOPE_API_KEY',
+        modalities=CHAT_AND_EMBED,
+        note='Qwen from the people who train it, and text-embedding-v4. Keys are per region: this is '
+             'Singapore; Virginia is https://dashscope-us.aliyuncs.com/compatible-mode/v1 and Beijing '
+             'https://dashscope.aliyuncs.com/compatible-mode/v1, and a workspace address from the '
+             'console works in place of any of them.',
+    ),
+    Host(
+        id='deepseek',
+        label='DeepSeek',
+        adapter='openai',
+        base_url='https://api.deepseek.com/v1',
+        env_key='DEEPSEEK_API_KEY',
+        modalities=CHAT,
+        note='DeepSeek\'s own API. It reasons by model rather than by setting — deepseek-reasoner '
+             'thinks, deepseek-chat does not — so the thinking level only decides what is shown.',
+    ),
+    Host(
         id='deepinfra',
         label='DeepInfra',
         adapter='openai',
@@ -199,6 +236,36 @@ HOSTS: tuple[Host, ...] = (
         lists_models=False,
         note='Embeddings only, and it publishes no model-listing endpoint — so the ids offered here come from its documentation, not from the service. An id it does not know fails at first use.',
         fallback_models=('voyage-3-large', 'voyage-3.5', 'voyage-3.5-lite', 'voyage-code-3', 'voyage-law-2', 'voyage-finance-2'),
+    ),
+    Host(
+        id='cohere',
+        label='Cohere (embeddings)',
+        adapter='openai',
+        # Cohere's compatibility endpoint, which speaks the OpenAI embeddings shape.
+        base_url='https://api.cohere.ai/compatibility/v1',
+        env_key='COHERE_API_KEY',
+        modalities=EMBEDDING,
+        note='Embed v4 through Cohere\'s OpenAI-compatible endpoint — multilingual, with a very long input window.',
+    ),
+    Host(
+        id='jina',
+        label='Jina AI',
+        adapter='openai',
+        base_url='https://api.jina.ai/v1',
+        env_key='JINA_API_KEY',
+        modalities=EMBEDDING,
+        note='Multilingual retrieval embeddings in the OpenAI shape.',
+    ),
+    Host(
+        id='whispercpp',
+        label='whisper.cpp',
+        adapter='openai',
+        base_url='http://127.0.0.1:8080/v1',
+        modalities=STT,
+        local=True,
+        note='A whisper.cpp server of your own. Started with --inference-path it answers on the OpenAI '
+             'path; started without, it answers on /inference, which is tried when the OpenAI path is '
+             'not there. It serves the one model it was started with and ignores the model name.',
     ),
     Host(
         id='ollama',
@@ -514,7 +581,7 @@ EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
         id='qwen3-embedding-8b',
         label='Qwen3-Embedding-8B',
         dimensions=4096,
-        served_by={'ollama': 'qwen3-embedding:8b', 'vllm': 'Qwen/Qwen3-Embedding-8B', 'llamacpp': 'Qwen/Qwen3-Embedding-8B', 'together': 'Qwen/Qwen3-Embedding-8B', 'deepinfra': 'Qwen/Qwen3-Embedding-8B'},
+        served_by={'ollama': 'qwen3-embedding:8b', 'vllm': 'Qwen/Qwen3-Embedding-8B', 'llamacpp': 'Qwen/Qwen3-Embedding-8B', 'together': 'Qwen/Qwen3-Embedding-8B', 'deepinfra': 'Qwen/Qwen3-Embedding-8B', 'siliconflow': 'Qwen/Qwen3-Embedding-8B', 'openrouter': 'qwen/qwen3-embedding-8b'},
         truncatable=True,
         max_input_tokens=32000,
         instruct_queries=True,
@@ -524,7 +591,7 @@ EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
         id='qwen3-embedding-4b',
         label='Qwen3-Embedding-4B',
         dimensions=2560,
-        served_by={'ollama': 'qwen3-embedding:4b', 'vllm': 'Qwen/Qwen3-Embedding-4B', 'llamacpp': 'Qwen/Qwen3-Embedding-4B', 'together': 'Qwen/Qwen3-Embedding-4B'},
+        served_by={'ollama': 'qwen3-embedding:4b', 'vllm': 'Qwen/Qwen3-Embedding-4B', 'llamacpp': 'Qwen/Qwen3-Embedding-4B', 'together': 'Qwen/Qwen3-Embedding-4B', 'siliconflow': 'Qwen/Qwen3-Embedding-4B'},
         truncatable=True,
         max_input_tokens=32000,
         instruct_queries=True,
@@ -545,6 +612,103 @@ EMBEDDING_MODELS: tuple[EmbeddingModel, ...] = (
         label='Nomic Embed Text',
         dimensions=768,
         served_by={'ollama': 'nomic-embed-text', 'perch:chat': 'nomic-embed-text'},
+    ),
+    EmbeddingModel(
+        id='qwen3-embedding-0.6b',
+        label='Qwen3-Embedding-0.6B',
+        dimensions=1024,
+        served_by={'ollama': 'qwen3-embedding:0.6b', 'vllm': 'Qwen/Qwen3-Embedding-0.6B', 'siliconflow': 'Qwen/Qwen3-Embedding-0.6B'},
+        truncatable=True,
+        max_input_tokens=32000,
+        instruct_queries=True,
+        note='The Qwen3 family\'s smallest, below the floor: the same window and query instruction '
+             'as its siblings, for a box with no card to spare.',
+    ),
+    EmbeddingModel(
+        id='text-embedding-v4',
+        label='Alibaba text-embedding-v4',
+        dimensions=1024,
+        served_by={'alibaba': 'text-embedding-v4'},
+        truncatable=True,
+        max_input_tokens=8192,
+        note='Qwen3-Embedding behind Alibaba Cloud\'s API. 1024 wide by default; 64 to 2048 on request.',
+    ),
+    EmbeddingModel(
+        id='bge-m3',
+        label='BGE-M3',
+        dimensions=1024,
+        served_by={'ollama': 'bge-m3', 'siliconflow': 'BAAI/bge-m3', 'vllm': 'BAAI/bge-m3'},
+        max_input_tokens=8192,
+        note='Multilingual retrieval across a hundred languages, on a box with no GPU to give Qwen3.',
+    ),
+    EmbeddingModel(
+        id='snowflake-arctic-embed2',
+        label='Snowflake Arctic Embed 2',
+        dimensions=1024,
+        served_by={'ollama': 'snowflake-arctic-embed2'},
+        truncatable=True,
+        max_input_tokens=8192,
+    ),
+    EmbeddingModel(
+        id='mxbai-embed-large',
+        label='mxbai-embed-large',
+        dimensions=1024,
+        served_by={'ollama': 'mxbai-embed-large'},
+        max_input_tokens=512,
+        note='Strong English retrieval in a small download; only a memory\'s opening reaches the vector.',
+    ),
+    EmbeddingModel(
+        id='embeddinggemma',
+        label='EmbeddingGemma',
+        dimensions=768,
+        served_by={'ollama': 'embeddinggemma'},
+        truncatable=True,
+        max_input_tokens=2048,
+    ),
+    EmbeddingModel(
+        id='all-minilm',
+        label='all-MiniLM',
+        dimensions=384,
+        served_by={'ollama': 'all-minilm'},
+        max_input_tokens=512,
+        note='The smallest that works at all, and well below the floor for recall.',
+    ),
+    EmbeddingModel(
+        id='mistral-embed',
+        label='Mistral Embed',
+        dimensions=1024,
+        served_by={'mistral': 'mistral-embed'},
+    ),
+    EmbeddingModel(
+        id='embed-v4.0',
+        label='Cohere Embed v4',
+        dimensions=1536,
+        served_by={'cohere': 'embed-v4.0'},
+        truncatable=True,
+        max_input_tokens=128000,
+    ),
+    EmbeddingModel(
+        id='jina-embeddings-v3',
+        label='Jina Embeddings v3',
+        dimensions=1024,
+        served_by={'jina': 'jina-embeddings-v3'},
+        truncatable=True,
+    ),
+    EmbeddingModel(
+        id='voyage-3.5',
+        label='Voyage voyage-3.5',
+        dimensions=1024,
+        served_by={'voyage': 'voyage-3.5'},
+        truncatable=True,
+        max_input_tokens=32000,
+    ),
+    EmbeddingModel(
+        id='voyage-3.5-lite',
+        label='Voyage voyage-3.5-lite',
+        dimensions=1024,
+        served_by={'voyage': 'voyage-3.5-lite'},
+        truncatable=True,
+        max_input_tokens=32000,
     ),
 )
 

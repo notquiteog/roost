@@ -143,6 +143,11 @@ class ChatRequest:
     #: required there — and asks that API for the model's own maximum instead.
     max_tokens: int = 0
     temperature: float | None = None
+    #: How hard to think: ``off`` … ``max``, or None for the model's own
+    #: default. One dial for every adapter — each spells it the way its host
+    #: accepts (see `openmirror.providers.reasoning`), so a session moved
+    #: between providers keeps meaning the same thing by it.
+    effort: str | None = None
     stop: list[str] = field(default_factory=list)
     # Provider-specific extras, passed through untouched. An escape hatch, and
     # deliberately not a place to put anything the registry needs to read.

@@ -178,7 +178,9 @@ def test_anthropic_asks_the_api_rather_than_guessing():
     # a broken adapter rather than a short answer — and ceilings differ per
     # model and move each generation.
     text = source('openmirror/providers/anthropic.py')
-    assert '_output_limit' in text
+    # `_model_info` since it also reads the capability tree from the same
+    # reply — which thinking shapes the model accepts — so the name says both.
+    assert '_model_info' in text
     assert '/models/' in text, 'the ceiling is not read from the Models API'
     # And the fallback must err downwards, for the same reason.
     m = re.search(r'_FALLBACK_MAX_OUTPUT\s*=\s*(\d+)', text)

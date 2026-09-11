@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+import sys
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -178,7 +181,40 @@ async def healthz() -> dict[str, object]:
 def main() -> None:
     import uvicorn
 
-    uvicorn.run('openmirror.main:app', host=config.host, port=config.port, log_level=config.log_level.lower())
+    server = uvicorn.Server(
+        uvicorn.Config('openmirror.main:app', host=config.host, port=config.port, log_level=config.log_level.lower())
+    )
+    if config.exit_with_stdin:
+        threading.Thread(target=_exit_when_stdin_closes, args=(server,), name='stdin', daemon=True).start()
+    server.run()
+    # What `uvicorn.run` does, and the reason to keep it: a port that was
+    # already taken should be a failed start to whoever launched this, not a
+    # clean exit.
+    if not server.started:
+        sys.exit(3)
+
+
+def _exit_when_stdin_closes(server) -> None:
+    """Stop once the other end of stdin is gone.
+
+    The desktop app's way of saying "I am gone" — quit, crash or killed alike,
+    because the operating system closes the pipe in every case. It is the same
+    convention the daemon's own MCP servers follow with it. Without this a
+    killed app leaves a daemon holding the port, and the next launch attaches
+    to it as though somebody else had started it, so nothing ever stops it.
+    """
+    # The descriptor, not `sys.stdin`. A thread parked in a buffered read holds
+    # that object's lock, and an interpreter exiting for any other reason — a
+    # port already taken — then aborts trying to take it at shutdown.
+    try:
+        fd = sys.stdin.fileno()
+        while os.read(fd, 1024):
+            pass
+    except (AttributeError, OSError, ValueError):
+        # No stdin at all, or one that cannot be read: nobody on the other end.
+        pass
+    log.info('stdin closed: shutting down')
+    server.should_exit = True
 
 
 if __name__ == '__main__':

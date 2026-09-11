@@ -385,7 +385,7 @@ sent off deliberately.
 ### Where it runs: not a thin client
 
 openmirror installs like `claude-code` or `codex` — a daemon on the machine you want
-worked on, reached from a browser. **The model may be remote. The agent is
+worked on, reached from its desktop app or a browser. **The model may be remote. The agent is
 not.** It runs shell with a risk classifier, edits files, drives a real
 Chromium, and optionally sees the screen and moves the mouse — all on the host
 it is installed on, whichever machine the tokens come from. `OPENMIRROR_WORKSPACE`,
@@ -541,7 +541,15 @@ mistaken for real leading whitespace in an edit and `3⇥` can.
 
 ## Running it
 
-Linux, macOS and Windows. Python 3.11+.
+**On a machine you sit at, install the app.** Every
+[release](https://github.com/notquiteog/openmirror/releases) has installers for
+Windows, macOS and Linux, and each carries the daemon inside it — no Python,
+no terminal, nothing else to install. It is a window that lives in the tray
+when you close it and tells you when the agent is waiting on you; the daemon
+runs for as long as the app does. See [desktop/README.md](desktop/README.md).
+
+**From source, or on a machine with no screen** — a server, a GPU box — run the
+daemon by itself. Linux, macOS and Windows. Python 3.11+.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'

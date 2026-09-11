@@ -1,17 +1,91 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>openmirror</title>
-<!-- Tauri requires a frontend directory to bundle. The real interface is
-     served by the daemon and loaded as an external URL at startup, so this is
-     only what shows if the daemon never came up. -->
+<!-- What the window shows until the daemon answers, and instead of it when it
+     does not. The interface itself is served by the daemon, and the app moves
+     the window there the moment it is up — so this page only ever shows
+     "starting" or "failed".
+
+     It asks the app for the state rather than waiting to be told, so it cannot
+     miss news that arrived before it had finished loading. -->
 <style>
-  body { margin:0; height:100vh; display:grid; place-items:center; background:#16161a;
-         color:#e6e4e0; font:14px/1.6 system-ui, sans-serif; text-align:center; }
-  code { background:#22222a; padding:2px 6px; border-radius:4px; }
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #16161a;
+         color: #e6e4e0; font: 14px/1.6 system-ui, sans-serif; }
+  main { width: min(600px, 88vw); padding: 32px 0; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+  p { margin: 0 0 12px; color: #b8b2aa; }
+  .muted { color: #8a847c; font-size: 13px; }
+  code { background: #22222a; padding: 1px 6px; border-radius: 4px; font-size: 12.5px; }
+  pre { margin: 0 0 12px; background: #1d1d23; border: 1px solid #2c2c34; border-radius: 8px;
+        padding: 10px 12px; max-height: 42vh; overflow: auto; white-space: pre-wrap;
+        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #cfc9c0; }
+  .actions { display: flex; gap: 8px; }
+  button { font: inherit; color: #e6e4e0; background: #2a2a33; border: 1px solid #3a3a45;
+           border-radius: 8px; padding: 6px 14px; cursor: pointer; }
+  button:hover { background: #33333d; }
+  .dots::after { content: ''; animation: dots 1.4s steps(4) infinite; }
+  @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
 </style>
-<div>
-  <h1 style="font-weight:600">openmirror</h1>
-  <p>Waiting for the daemon.</p>
-  <p style="color:#9a948c">If this stays here, start it yourself with <code>openmirror</code><br>
-     and check it is listening on <code>127.0.0.1:8477</code>.</p>
-</div>
+<main>
+  <h1 id="title" class="dots">Starting openmirror</h1>
+  <p id="detail">Looking for the daemon.</p>
+  <p id="slow" class="muted" hidden>The first start after installing takes longest: the daemon unpacks
+    itself, and on Windows it is scanned before it is allowed to run.</p>
+  <pre id="tail" hidden></pre>
+  <p id="log" class="muted" hidden></p>
+  <div class="actions" id="actions" hidden>
+    <button id="retry" type="button">Try again</button>
+    <button id="logs" type="button">Open the logs folder</button>
+  </div>
+</main>
+<script>
+  const tauri = window.__TAURI__;
+  const invoke = tauri && tauri.core && tauri.core.invoke;
+  const $ = (id) => document.getElementById(id);
+  let phase = null;
+  let since = Date.now();
+
+  function render(s) {
+    if (s.phase !== phase) {
+      phase = s.phase;
+      since = Date.now();
+    }
+    const failed = s.phase === 'failed';
+    $('title').textContent = s.title;
+    $('title').classList.toggle('dots', !failed);
+    $('detail').textContent = s.detail;
+    $('slow').hidden = failed || Date.now() - since < 15000;
+    $('tail').hidden = !(failed && s.tail);
+    $('tail').textContent = s.tail || '';
+    $('log').hidden = !(failed && s.log);
+    $('log').innerHTML = '';
+    if (s.log) {
+      const code = document.createElement('code');
+      code.textContent = s.log;
+      $('log').append('The whole log is in ', code, '.');
+    }
+    $('actions').hidden = !failed;
+  }
+
+  async function poll() {
+    try {
+      render(await invoke('status'));
+    } catch (err) {
+      render({ phase: 'failed', title: 'openmirror could not start', detail: String(err) });
+    }
+    setTimeout(poll, 400);
+  }
+
+  if (invoke) {
+    $('retry').onclick = () => invoke('retry');
+    $('logs').onclick = () => invoke('open_logs');
+    poll();
+  } else {
+    render({
+      phase: 'failed',
+      title: 'This page belongs to the openmirror app',
+      detail: 'Opened anywhere else it has nothing to report. The interface is served by the daemon, at http://127.0.0.1:8477.',
+    });
+  }
+</script>

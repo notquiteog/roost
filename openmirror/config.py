@@ -73,6 +73,12 @@ class Config:
     host: str = field(default_factory=lambda: os.getenv('OPENMIRROR_HOST', '127.0.0.1'))
     port: int = field(default_factory=lambda: _int('OPENMIRROR_PORT', 8477))
 
+    # Exit when stdin closes. The desktop app sets this: it starts the daemon
+    # with a pipe on stdin and holds the other end, so the daemon cannot
+    # outlive the app that owns it. Not something to set by hand — a daemon
+    # run from a terminal would stop at the first Ctrl-D.
+    exit_with_stdin: bool = field(default_factory=lambda: _bool('OPENMIRROR_EXIT_WITH_STDIN'))
+
     # The directory an agent session may touch. Sessions are confined to it,
     # and the confinement is the only thing between a model and the rest of
     # the disk — so it defaults to the working directory rather than to $HOME.

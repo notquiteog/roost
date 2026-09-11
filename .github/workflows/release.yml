@@ -1,0 +1,343 @@
+# Releases openmirror's desktop app for Windows, macOS and Linux.
+#
+# A tag like v0.2.0 builds every installer, installs each one on a fresh
+# machine and checks that it works there, and only then publishes a GitHub
+# release with all of them attached. A run started by hand, or a pull request
+# that touches the app, does everything except publish: the way to try a
+# change on the two platforms nobody on the project owns.
+#
+# Every platform builds on its own runner, because neither half of the app
+# cross-compiles. The daemon is Python frozen by PyInstaller, which packs the
+# interpreter and libraries of the machine it runs on; the window is Tauri,
+# which needs each platform's own webview and bundler.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: '3.12'
+  PYINSTALLER_VERSION: '6.22.2'
+  TAURI_CLI_VERSION: '2.11.4'
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # A tag that disagrees with pyproject.toml or Cargo.toml would publish
+      # installers named for one version from a release called another.
+      - name: Versions agree
+        id: version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version=$(python desktop/ci/version.py "$GITHUB_REF_NAME")
+          else
+            version=$(python desktop/ci/version.py)
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: The daemon's tests
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pytest -q
+
+  build:
+    name: build (${{ matrix.name }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest Ubuntu GitHub offers, for the oldest glibc: a build
+          # runs on systems newer than the one that made it, never older.
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,rpm,appimage
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - name: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          # The last Intel image GitHub offers, available until August 2027.
+          - name: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Webview and tray headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libxdo-dev libssl-dev patchelf file
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: The daemon, with the extras a desktop wants
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install '.[desktop,tor,vec]' "pyinstaller==$PYINSTALLER_VERSION"
+
+      - name: Builds for the oldest macOS the app supports
+        if: runner.os == 'macOS'
+        run: python desktop/ci/macos_floor.py repin
+
+      - name: Freeze the daemon
+        run: python desktop/sidecar/build.py --target ${{ matrix.target }}
+
+      - name: Nothing frozen needs a newer macOS than the app says
+        if: runner.os == 'macOS'
+        run: python desktop/ci/macos_floor.py check
+
+      - name: The frozen daemon answers, serves the page, and stops
+        run: |
+          python desktop/ci/smoke.py daemon \
+            "desktop/src-tauri/binaries/openmirror-daemon-${{ matrix.target }}${{ runner.os == 'Windows' && '.exe' || '' }}"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'desktop/src-tauri -> target'
+          key: ${{ matrix.target }}
+
+      - name: The app's own tests
+        if: runner.os == 'Linux'
+        run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
+
+      - name: Build the app
+        env:
+          # Signing and notarising for macOS, once the project has an Apple
+          # Developer ID: add these as repository secrets and nothing here
+          # changes. Until then they are empty, and the build is signed ad hoc
+          # instead — enough for Apple Silicon to run it, not enough for
+          # Gatekeeper to trust it; the release notes say what to do.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          configs=(--config src-tauri/tauri.release.conf.json)
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            # Set but empty would read as "sign with this", so not set at all.
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+            if [ "$RUNNER_OS" = macOS ]; then
+              configs+=(--config src-tauri/tauri.adhoc.conf.json)
+            fi
+          fi
+          cd desktop
+          npx --yes "@tauri-apps/cli@$TAURI_CLI_VERSION" build --ci \
+            --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}" "${configs[@]}"
+
+      - name: Collect the installers
+        run: |
+          mkdir -p out
+          find "desktop/src-tauri/target/${{ matrix.target }}/release/bundle" -maxdepth 2 -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*-setup.exe' -o -name '*.msi' -o -name '*.dmg' \) \
+            -exec cp {} out/ \;
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.name }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # Each installer is tried on a machine that has never seen the build: only
+  # the installer, installed the way a person would install it.
+
+  test-linux:
+    name: test (${{ matrix.os }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: desktop/ci
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: installers-linux-x64
+          path: out
+      - name: Install the .deb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ./out/*.deb xvfb dbus libfuse2
+          python -m pip install psutil
+      # Both into a file, shown afterwards. The session bus starts a desktop
+      # portal on GTK's behalf, and a portal was seen to outlive the test by
+      # minutes still holding the output it inherited — which would leave a
+      # step waiting on it rather than on the test.
+      - name: Run it, start a second copy, then kill it
+        run: |
+          status=0
+          dbus-run-session -- xvfb-run -a python desktop/ci/smoke.py app --stop kill:openmirror-desktop --again \
+            -- /usr/bin/openmirror-desktop > smoke.log 2>&1 || status=$?
+          cat smoke.log
+          exit $status
+      - name: The AppImage, the same way
+        run: |
+          chmod +x out/*.AppImage
+          status=0
+          dbus-run-session -- xvfb-run -a python desktop/ci/smoke.py app --stop kill:openmirror-desktop \
+            -- out/*.AppImage > smoke.log 2>&1 || status=$?
+          cat smoke.log
+          exit $status
+
+  test-windows:
+    name: test (windows)
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: desktop/ci
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: installers-windows-x64
+          path: out
+      - name: Install with the setup .exe
+        run: |
+          python -m pip install psutil
+          $setup = Get-ChildItem out\*-setup.exe | Select-Object -First 1
+          Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
+          $app = Get-ChildItem $env:LOCALAPPDATA -Recurse -Depth 3 -Filter openmirror-desktop.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $app) { throw 'the installer left no openmirror-desktop.exe under %LOCALAPPDATA%' }
+          Get-ChildItem $app.Directory
+          "APP=$($app.FullName)" >> $env:GITHUB_ENV
+      - name: Run it, start a second copy, then kill it
+        run: python desktop/ci/smoke.py app --stop kill:openmirror-desktop --again -- "$env:APP"
+      - name: The .msi installs too
+        run: |
+          $msi = Get-ChildItem out\*.msi | Select-Object -First 1
+          $run = Start-Process msiexec -ArgumentList '/i', "`"$($msi.FullName)`"", '/qn', '/l*v', 'msi.log' -Wait -PassThru
+          if ($run.ExitCode -ne 0) { Get-Content msi.log -Tail 60; throw "msiexec exited with $($run.ExitCode)" }
+          Get-ChildItem "$env:ProgramFiles\openmirror"
+
+  test-macos:
+    name: test (${{ matrix.name }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-15
+          - name: macos-x64
+            os: macos-15-intel
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: desktop/ci
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: installers-${{ matrix.name }}
+          path: out
+      - name: Install from the disk image
+        run: |
+          python -m pip install psutil
+          hdiutil attach out/*.dmg -mountpoint /Volumes/openmirror -nobrowse
+          cp -R /Volumes/openmirror/openmirror.app /Applications/
+          hdiutil detach /Volumes/openmirror
+          ls -l /Applications/openmirror.app/Contents/MacOS/
+          codesign --verify --deep --strict --verbose=2 /Applications/openmirror.app
+          codesign --display --verbose=2 /Applications/openmirror.app 2>&1 | grep -E '^(Identifier|Format|Signature|TeamIdentifier|Runtime)' || true
+          # What a download meets. An ad-hoc build is expected to be refused
+          # here, which is what the release notes are about; shown, not failed.
+          spctl --assess --type execute --verbose /Applications/openmirror.app || true
+      - name: Open it, then quit it
+        run: python desktop/ci/smoke.py app --stop quit:openmirror -- open -n /Applications/openmirror.app
+      - name: Open it, then kill it
+        run: python desktop/ci/smoke.py app --stop kill:openmirror-desktop -- open -n /Applications/openmirror.app
+
+  release:
+    name: release
+    if: github.ref_type == 'tag'
+    needs: [check, test-linux, test-windows, test-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: desktop/ci
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: out
+          merge-multiple: true
+      - name: Checksums
+        working-directory: out
+        run: sha256sum -- * | tee SHA256SUMS.txt
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          # v0.2.0-rc.1 and the like are previews, not the latest release.
+          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" out/* --verify-tag \
+            --title "openmirror ${{ needs.check.outputs.version }}" \
+            --notes "$(cat desktop/ci/release-notes.md)" --generate-notes "${flags[@]}"

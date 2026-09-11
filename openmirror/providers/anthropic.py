@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from openmirror.net.transport import Transport
+from openmirror.providers import reasoning
 from openmirror.providers.base import (
     ChatProvider,
     ChatRequest,
@@ -64,12 +65,9 @@ def _to_anthropic_content(block: Any) -> dict[str, Any] | None:
 
 
 
-#: Effort levels this API accepts. `high` is the default when none is sent.
-_EFFORTS = frozenset({'low', 'medium', 'high', 'xhigh', 'max'})
-
 #: Keys of `ChatRequest.extra` this adapter converts itself, and so must not
 #: also splat into the payload verbatim.
-_TRANSLATED_EXTRAS = frozenset({'think', 'effort'})
+_TRANSLATED_EXTRAS = reasoning.TRANSLATED_EXTRAS
 
 #: Models that still accept temperature/top_p/top_k. The current generation
 #: does not: those parameters were removed and are a 400, not an ignore.
@@ -80,7 +78,7 @@ def _takes_sampling(model: str) -> bool:
     return bool(_SAMPLING_MODELS.match(model or ''))
 
 
-def reasoning_params(req: ChatRequest) -> dict[str, Any]:
+def reasoning_params(req: ChatRequest, *, capabilities: Any = None, max_tokens: int = 0) -> dict[str, Any]:
     """The reasoning and sampling half of the request body.
 
     Its own function so it can be checked without an endpoint. Every rule here
@@ -88,48 +86,36 @@ def reasoning_params(req: ChatRequest) -> dict[str, Any]:
     response body — which is the argument for testing it directly rather than
     trusting a live call to have exercised it.
 
-    Three things about this API moved under the older shape most code was
-    written to:
+    What moved under the older shape most code was written to, and is now
+    decided per model family in `openmirror.providers.reasoning`:
 
     * ``{'type': 'enabled', 'budget_tokens': N}`` is a 400 on the current
-      models. Depth is ``output_config.effort`` now, not a token budget.
+      models — and REQUIRED on Haiku 4.5, which rejects adaptive thinking
+      outright. Sending adaptive to every model made openmirror unusable on it.
     * ``display`` defaults to ``omitted``, a silent change from Opus 4.6.
       Without asking for ``summarized``, thinking blocks still arrive and still
-      bill — with empty text. openmirror renders working-out, so the panel would sit
-      blank through a long turn and nothing would say why.
-    * ``{'type': 'disabled'}`` is the wrong way to turn reasoning off, and
-      dangerous in an agent specifically: with thinking disabled the model
-      sometimes writes a tool call into its VISIBLE TEXT instead of a tool_use
-      block. The turn succeeds, the call never runs, no error is raised, and
-      that text pollutes every later turn. It can also leak ``<thinking>`` tags
-      into the answer.
+      bill — with empty text, and the working-out panel sits blank.
+    * A disabled thinking type is the wrong way to turn reasoning off in an
+      agent: the model sometimes writes a tool call into its VISIBLE TEXT
+      instead of a tool_use block, and the turn succeeds with nothing run. So
+      ``off`` — which the voice path asks for, because reasoning is silence in
+      a call — is low effort with the working-out hidden.
+    * Opus 4.6 has no ``xhigh``; the level clamps down to one it has.
 
-    So reasoning is always on, and ``think: False`` — which the voice path
-    sets, because reasoning is silence in a call — becomes low effort with the
-    working-out hidden rather than a disabled flag. That gets the latency the
-    caller asked for without the failure mode.
+    ``capabilities`` is the Models API's tree for this model, when known; it
+    overrides the id-based table, so a model released later is still asked in
+    a form it accepts.
     """
-    out: dict[str, Any] = {}
-    want_think = req.extra.get('think', True)
-    out['thinking'] = {
-        'type': 'adaptive',
-        'display': 'summarized' if want_think is not False else 'omitted',
-    }
-    effort = req.extra.get('effort')
-    if want_think is False:
-        effort = 'low'
-    elif isinstance(want_think, str):
-        # Ollama's `think` carries a level on the models that expose one.
-        effort = want_think
-    # An unrecognised level is dropped rather than forwarded: an unknown effort
-    # is itself a 400, and this API already defaults to `high`.
-    if effort in _EFFORTS:
-        out['output_config'] = {'effort': effort}
-
+    level = reasoning.request_level(req.effort, req.extra)
+    r = reasoning.anthropic_reasoning(
+        req.model, level, capabilities=capabilities, max_tokens=max_tokens,
+        takes_sampling=_takes_sampling(req.model),
+    )
+    out = dict(r['body'])
     # Sampling was REMOVED on the current models — temperature, top_p and top_k
-    # are each a 400 rather than being ignored, which turns one setting into a
-    # failed request. Sent only where it is understood.
-    if req.temperature is not None and _takes_sampling(req.model):
+    # are each a 400 rather than being ignored — and on the older ones it is a
+    # 400 while the model thinks. Sent only where both allow it.
+    if req.temperature is not None and r['sampling']:
         out['temperature'] = req.temperature
     return out
 
@@ -149,8 +135,8 @@ class AnthropicProvider(ChatProvider):
         self.provider_id = provider_id
         self.timeout = timeout
         self.transport = transport or Transport(timeout=timeout)
-        # Output ceilings, per model. See _output_limit.
-        self._output_limits: dict[str, int] = {}
+        # Output ceiling and capability tree, per model. See _model_info.
+        self._model_infos: dict[str, tuple[int, Any]] = {}
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -166,19 +152,24 @@ class AnthropicProvider(ChatProvider):
             if blocks:
                 messages.append({'role': msg.role, 'content': blocks})
 
+        limit, capabilities = await self._model_info(req.model)
+        params = reasoning_params(req, capabilities=capabilities, max_tokens=req.max_tokens or limit)
+        # A budget-only model (Haiku 4.5) refuses a thinking budget that does
+        # not fit under max_tokens with room left for the answer.
+        budget = (params.get('thinking') or {}).get('budget_tokens') or 0
         payload: dict[str, Any] = {
             'model': req.model,
             'messages': messages,
             # Required by this API -- there is no omitting it, so this is the
             # one adapter that cannot express "no ceiling" by absence. It sends
             # the model's own maximum, asked for once and remembered.
-            'max_tokens': req.max_tokens or await self._output_limit(req.model),
+            'max_tokens': max(req.max_tokens or limit, budget + 1024 if budget else 0),
             'stream': True,
         }
         if req.system:
             payload['system'] = req.system
 
-        payload.update(reasoning_params(req))
+        payload.update(params)
         if req.stop:
             payload['stop_sequences'] = req.stop
         if req.tools:
@@ -267,22 +258,24 @@ class AnthropicProvider(ChatProvider):
     #: rather than a short answer -- so the fallback errs downwards.
     _FALLBACK_MAX_OUTPUT = 8192
 
-    async def _output_limit(self, model: str) -> int:
-        """The model's own output ceiling, from ``GET /v1/models/{id}``.
+    async def _model_info(self, model: str) -> tuple[int, Any]:
+        """The model's own output ceiling and capability tree, from ``GET /v1/models/{id}``.
 
         ``max_tokens`` on that response is the OUTPUT cap and
         ``max_input_tokens`` is the context window -- two different fields,
         and reading the wrong one would ask for an output the size of the
-        whole window.
+        whole window. ``capabilities`` says which thinking shapes and effort
+        levels the model takes.
 
-        Remembered per model: a model's ceiling does not change, and a
-        lookup on every turn would put a round trip in front of every
-        reply.
+        Remembered per model once it has answered: a model's ceiling does not
+        change, and a lookup on every turn would put a round trip in front of
+        every reply. A failed lookup is not remembered, so one timeout does
+        not pin the conservative fallback for the life of the process.
         """
-        cached = self._output_limits.get(model)
+        cached = self._model_infos.get(model)
         if cached is not None:
             return cached
-        limit = self._FALLBACK_MAX_OUTPUT
+        limit, capabilities, answered = self._FALLBACK_MAX_OUTPUT, None, False
         try:
             async with self.transport.session(10) as session:
                 async with session.get(
@@ -293,12 +286,16 @@ class AnthropicProvider(ChatProvider):
                         reported = body.get('max_tokens')
                         if isinstance(reported, int) and reported > 0:
                             limit = reported
+                        if isinstance(body.get('capabilities'), dict):
+                            capabilities = body['capabilities']
+                        answered = True
         except Exception:
             # A capability lookup that fails is a reason to be conservative
             # about length, never a reason to fail somebody's turn.
             pass
-        self._output_limits[model] = limit
-        return limit
+        if answered:
+            self._model_infos[model] = (limit, capabilities)
+        return limit, capabilities
 
     async def models(self) -> list[dict[str, Any]]:
         async with self.transport.session(30) as session:

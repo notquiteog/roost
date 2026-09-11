@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the app's own Info.plist by Tauri's bundler.
+
+     Talk and Live capture the microphone in the page, and macOS only offers
+     the microphone to an app that says what it wants it for. Without this key
+     the request is refused without the question ever being asked, and voice
+     hears nothing, with no error anywhere that says why. -->
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>openmirror listens when you talk to it in Talk and Live.</string>
+</dict>
+</plist>

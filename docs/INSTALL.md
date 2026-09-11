@@ -38,9 +38,31 @@ For a phone, any Tailscale-style overlay does the same job. `mkcert` is a
 third option, and the only one that needs a local CA in your trust store —
 which is a lot to ask of an installer, so it is not the default.
 
+## The desktop app
+
+On a machine you sit at, this is the way in. Every
+[release](https://github.com/notquiteog/openmirror/releases) has an installer
+for Windows (`.exe`, `.msi`), macOS (`.dmg`, for Apple Silicon or Intel) and
+Linux (`.deb`, `.rpm`, `.AppImage`), and each one is the whole of openmirror:
+the window, and the daemon it runs, with its own Python inside. Neither the
+Windows nor the macOS build is signed yet, and the release notes say what to
+click the first time.
+
+A daemon the app starts keeps everything in `~/.openmirror` — its data, its
+logs and an optional `.env` — and has your home directory as its workspace, as
+it would when started from a new terminal. It carries the `[desktop]`, `[tor]`
+and `[vec]` extras below, but not `[browser]` yet: Playwright brings a Node
+runtime of its own and downloads its own Chromium, a step the app cannot take
+for you. For now the browser tools want a daemon installed as below, with
+`[browser]`; start it before the app and the app will use it.
+
+How the app finds, starts and stops its daemon is in
+[desktop/README.md](../desktop/README.md).
+
 ## Installing the daemon
 
-Python 3.11+, on Linux, macOS or Windows:
+For a machine with no screen, or for what the app does not carry. Python
+3.11+, on Linux, macOS or Windows:
 
 ```bash
 uv tool install openmirror
@@ -165,18 +187,21 @@ Nothing here survives a reboot yet. An autonomous agent probably should, so
 this is the next thing worth adding: a systemd user unit on Linux, a
 `launchd` plist on macOS, and a scheduled task or service on Windows.
 
-## Do you need a desktop app?
+## What the app adds, and what it cannot
 
-Not for this to work. A native shell would add a tray icon, a dock entry and
-OS notifications, and it would wrap the *same* page — so it is additive rather
-than a fork in the road.
+The app wraps the *same* page a browser tab gets, so it is additive rather
+than a fork in the road: a tray icon, a Dock or taskbar entry, a notification
+when the agent is waiting on you, and a daemon that starts and stops with it.
 
-One thing it would not add on every platform is a global push-to-talk hotkey.
-On Wayland that needs the `org.freedesktop.portal.GlobalShortcuts` portal, and
-on the COSMIC session this was developed on that portal is not present — so no
+Voice goes through each platform's own webview, and each asks about the
+microphone differently. On macOS the system asks, once. On Windows, WebView2
+asks with a prompt of its own. On Linux nobody would have: WebKitGTK refuses
+any permission request that goes unanswered, so voice heard nothing and said
+nothing. The app answers it — for the daemon's page and nothing else. Measured
+with WebKit's mock devices, `getUserMedia` was refused until it did, and
+granted after.
+
+One thing it cannot add everywhere is a global push-to-talk hotkey. On Wayland
+that needs the `org.freedesktop.portal.GlobalShortcuts` portal, and on the
+COSMIC session this was developed on that portal is not present — so no
 framework, native or otherwise, can offer it there today.
-
-If you do build one, Tauri wraps the existing HTML for about 10 MB. Note that
-on Linux it renders in WebKitGTK rather than Chromium, which is the least
-exercised of the three engines for microphone capture — worth testing the
-voice path early rather than late.

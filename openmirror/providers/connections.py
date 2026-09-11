@@ -189,8 +189,17 @@ def build(conn: Connection) -> tuple[ProviderInfo, dict[Modality, Any]]:
     elif conn.adapter == 'google':
         from openmirror.providers.google import GoogleProvider
         from openmirror.providers.google_media import GoogleMediaProvider
+        from openmirror.providers.openai_compat import OpenAICompatProvider
 
         impls = {
+            # Chat through Google's OpenAI-compatible endpoint, which sits under
+            # the same base URL and takes the same key. The catalogue has always
+            # offered this host for chat, and without this entry the narrowing
+            # below dropped it silently — a Gemini connection could embed and
+            # draw and could not be talked to.
+            Modality.CHAT: OpenAICompatProvider(
+                f'{conn.base_url.rstrip("/")}/openai', conn.api_key, provider_id=ident, transport=transport
+            ),
             Modality.EMBEDDING: one(GoogleProvider),
             Modality.IMAGE: one(GoogleMediaProvider, kind='image', timeout=long_running),
             Modality.VIDEO: one(GoogleMediaProvider, kind='video', timeout=long_running),
