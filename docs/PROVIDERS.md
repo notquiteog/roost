@@ -49,9 +49,9 @@ whatever was true when this file was written is worse than no preset at all.
 
 | | |
 |---|---|
-| **Hosted chat** | OpenAI, Anthropic, Groq, OpenRouter, Fireworks, Together, NanoGPT, DeepInfra, Cerebras, Mistral, xAI |
-| **Hosted embedding** | OpenAI, Voyage, Google, and the gateways above |
-| **Your hardware** | Ollama (local or remote), LM Studio, vLLM, llama.cpp, AUTOMATIC1111, ComfyUI |
+| **Hosted chat** | OpenAI, Anthropic, Google (Gemini, through its OpenAI-compatible endpoint), Groq, OpenRouter, Fireworks, Together, SiliconFlow, Alibaba Cloud (Qwen), DeepSeek, NanoGPT, DeepInfra, Cerebras, Mistral, xAI |
+| **Hosted embedding** | OpenAI, Voyage, Google, Alibaba Cloud (`text-embedding-v4`), SiliconFlow, Cohere, Jina, Mistral, and the gateways above |
+| **Your hardware** | Ollama (local or remote), LM Studio, vLLM, llama.cpp, whisper.cpp, AUTOMATIC1111, ComfyUI |
 | **Images** | AUTOMATIC1111, ComfyUI, Replicate, fal, OpenAI, Google (Imagen and the conversational image model), Black Forest Labs, Stability, Ideogram, Recraft, Runway, Luma, Kling, MiniMax, xAI, Together, Fireworks, DeepInfra, OpenRouter |
 | **Video** | ComfyUI, Replicate, fal, OpenAI (Sora), Google (Veo), Runway, Luma, Kling, MiniMax, Stability, OpenRouter |
 | **Both** | Open WebUI, which is itself a gateway to everything configured over there |
@@ -66,7 +66,6 @@ answers a wrong key with the full catalogue, so **Test** asks `/key`, which
 does refuse. And speech comes back at the rate the voice was made at — 24 kHz
 from Kokoro, 44.1 kHz from Fish Audio — which openmirror resamples rather than
 playing nearly twice as slow.
-
 
 Anything else that speaks OpenAI's shapes works too: pick any OpenAI-shaped
 preset and change the address. That adapter is worth more than the rest put
@@ -259,6 +258,37 @@ best at.
   reasoning is silence: `gemma4:12b` emitted 1,534 characters of thinking
   before 276 of content, first content token at 7.8 seconds, so
   sentence-at-a-time synthesis bought nothing. The agent path leaves it on.
+
+### How hard it thinks
+
+One level per session — `off`, `low`, `medium`, `high`, `xhigh`, `max`, or
+*default*, which leaves the model at its own. Set it from the **think** chip
+beside the approval mode, with `/think high` in the composer, with `effort` on
+`POST /api/sessions`, or with `{"type": "policy.set", "effort": "high"}` on the
+socket. It changes from the next request on, subagents inherit it, and the
+browser remembers the last one chosen for the next session.
+
+The level is one dial and every host spells it differently, which is the whole
+of `openmirror/providers/reasoning.py`:
+
+| Host | What is sent |
+|---|---|
+| Anthropic | adaptive thinking + `output_config.effort` on 4.6 and later (no `xhigh` on 4.6); a `budget_tokens` on Haiku 4.5 and Opus 4.5, which refuse adaptive; the Models API's capability tree overrides the table |
+| OpenAI | `reasoning_effort` from the model's own ladder — `none`…`max` on GPT-5.6, `low`…`max` on GPT-6 Astra (no `none`), `minimal` on the original gpt-5; nothing at all to a model that does not reason |
+| OpenRouter | `reasoning: {effort}`, which OpenRouter maps per vendor |
+| Groq | per model: `reasoning_effort` low–high on gpt-oss, `none`/`default` (plus levels on qwen3.8) on Qwen with `reasoning_format: parsed` |
+| Fireworks | `reasoning_effort`, `none` for off |
+| Together | `reasoning: {enabled}` on hybrids, `reasoning_effort` on gpt-oss |
+| SiliconFlow, Alibaba Cloud | `enable_thinking` and a `thinking_budget`; Alibaba's open-source Qwen3 builds do not think on a non-streamed call |
+| Gemini | `reasoning_effort`; only the 2.5 Flash models can be switched off |
+| Ollama | `think`: `false` or low/medium/high — and `low` for off on gpt-oss, which ignores `false` |
+
+Two rules hold across every row: a level a model lacks clamps **down** to one
+it has, so `max` on a local model is its hardest setting rather than a 400;
+and `off` means the least a model allows, never its default. Thinking is never
+switched off on Claude with a disabled type — in an agent that makes the model
+write tool calls into its visible text — so `off` there is low effort with the
+working-out hidden. The same tables live in tern and cryptostore.
 
 ### How the default is picked
 
