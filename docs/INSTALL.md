@@ -1,6 +1,6 @@
 # Installing
 
-Roost is a daemon plus a client. The daemon runs on the machine you want the
+openmirror is a daemon plus a client. The daemon runs on the machine you want the
 agent to control; the client is a page it serves. That shape is why there is
 no domain, no certificate and no account anywhere in this document.
 
@@ -18,7 +18,7 @@ Measured on this machine:
 | `http://127.0.0.1:8477` | yes | available |
 | `http://192.168.1.x:8477` | **no** | **undefined** |
 
-So the only case that needs anything extra is reaching Roost from *another*
+So the only case that needs anything extra is reaching openmirror from *another*
 machine — and the answer there is not a domain either.
 
 ## Reaching it from your phone or laptop
@@ -43,13 +43,13 @@ which is a lot to ask of an installer, so it is not the default.
 Python 3.11+, on Linux, macOS or Windows:
 
 ```bash
-uv tool install roost
+uv tool install openmirror
 ```
 
-or `pipx install roost`. Then:
+or `pipx install openmirror`. Then:
 
 ```bash
-roost
+openmirror
 ```
 
 and open <http://127.0.0.1:8477>.
@@ -61,10 +61,10 @@ shell, web and memory is a working agent. Each is an extra rather than a
 dependency so an install that never uses it does not carry the weight:
 
 ```bash
-uv tool install 'roost[browser]'   # Playwright — a real Chromium
-uv tool install 'roost[desktop]'   # seeing and driving a screen
-uv tool install 'roost[tor]'       # routing a connection through a SOCKS proxy
-uv tool install 'roost[vec]'      # a C scan over memory, instead of a Python one
+uv tool install 'openmirror[browser]'   # Playwright — a real Chromium
+uv tool install 'openmirror[desktop]'   # seeing and driving a screen
+uv tool install 'openmirror[tor]'       # routing a connection through a SOCKS proxy
+uv tool install 'openmirror[vec]'      # a C scan over memory, instead of a Python one
 ```
 
 After installing `[browser]`, fetch the browser itself, once:
@@ -77,7 +77,7 @@ playwright install chromium
 It is `sqlite-vec`, a loadable SQLite extension, so it runs in the same process
 with no service to manage — measured at fifty thousand memories, 12.9 ms
 against 107.6 ms for the Python scan's arithmetic alone, before that scan also
-pays to hand back every row. Roost works without it and says nothing: search
+pays to hand back every row. openmirror works without it and says nothing: search
 falls back to the scan, which returns the same memories in the same order.
 
 It is an extra rather than a dependency because loading it needs
@@ -100,7 +100,7 @@ test suite.
 
 **Chat: `qwen3.5:9b` or `gemma4:12b`. Embedding: `Qwen3-Embedding-4B`.**
 
-What Roost's features are built and tested against. Below it the agent loop
+What openmirror's features are built and tested against. Below it the agent loop
 does not slow down, it gets unreliable in ways that look like the harness
 misbehaving — prose where a tool call was needed, a plan the model has already
 lost. Nothing refuses a smaller model; the floor is what a **feature** may
@@ -123,7 +123,7 @@ the tokens come from. Install it where you would be willing to run an agent.
 
 *Models elsewhere* — a provider API, or a GPU box on the LAN such as Perch — is
 the common case, costs this machine nothing for inference, and has no floor at
-all if the provider is a frontier model. Set `ROOST_LOCAL_ONLY` to forbid
+all if the provider is a frontier model. Set `OPENMIRROR_LOCAL_ONLY` to forbid
 hosted providers outright; it is enforced when a route resolves, so a local
 backend being down is an error rather than a quiet fallback to somebody's API.
 

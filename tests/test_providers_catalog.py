@@ -12,10 +12,10 @@ import json
 
 import pytest
 
-from roost.providers import catalog, connections
-from roost.providers.base import Modality
-from roost.providers.connections import Connection, ConnectionStore
-from roost.providers.registry import can_serve, pick_model
+from openmirror.providers import catalog, connections
+from openmirror.providers.base import Modality
+from openmirror.providers.connections import Connection, ConnectionStore
+from openmirror.providers.registry import can_serve, pick_model
 
 # -- the catalogue ----------------------------------------------------------
 
@@ -125,20 +125,64 @@ def test_a_preset_becomes_a_connection():
 
 
 def test_a_connection_is_narrowed_to_what_its_adapter_can_do():
-    """Ticking video on an OpenAI-shaped host must not register a video provider
-    that fails on its first call."""
-    conn = Connection(id='x', label='X', adapter='openai', base_url='http://x',
-                      modalities=['chat', 'video'])
+    """Ticking a modality an adapter has no implementation for must not register
+    a provider that fails on its first call."""
+    conn = Connection(id='x', label='X', adapter='anthropic', base_url='http://x',
+                      modalities=['chat', 'image', 'video'])
     info, impls = connections.build(conn)
-    assert Modality.CHAT in impls
-    assert Modality.VIDEO not in impls
+    assert set(impls) == {Modality.CHAT}
     assert info.id == 'x'
 
 
-def test_voyage_and_google_are_embedding_only():
-    for host_id in ('voyage', 'google'):
-        _, impls = connections.build(connections.from_host(host_id))
-        assert set(impls) == {Modality.EMBEDDING}, host_id
+def test_a_second_api_behind_the_same_key_gets_its_own_adapter():
+    """OpenAI's video endpoint is not OpenAI-shaped chat, so the video slot on
+    an OpenAI connection is Sora rather than the chat adapter with a different
+    method called on it."""
+    from openmirror.providers.openai_compat import OpenAICompatProvider
+    from openmirror.providers.sora import SoraProvider
+
+    _, impls = connections.build(connections.from_host('openai'))
+    assert isinstance(impls[Modality.CHAT], OpenAICompatProvider)
+    assert isinstance(impls[Modality.IMAGE], OpenAICompatProvider)
+    assert isinstance(impls[Modality.VIDEO], SoraProvider)
+    # And the same object serves every modality the one adapter does handle,
+    # which is what makes one Tor toggle cover all of them.
+    assert impls[Modality.CHAT] is impls[Modality.IMAGE]
+
+
+def test_voyage_is_embedding_only():
+    _, impls = connections.build(connections.from_host('voyage'))
+    assert set(impls) == {Modality.EMBEDDING}
+
+
+def test_google_serves_media_from_a_different_adapter_than_embeddings():
+    """One key, three request shapes: `:embedContent`, `:predict` and
+    `:predictLongRunning` are not the same API and must not be one object."""
+    from openmirror.providers.google import GoogleProvider
+    from openmirror.providers.google_media import GoogleMediaProvider
+
+    _, impls = connections.build(connections.from_host('google'))
+    assert set(impls) == {Modality.EMBEDDING, Modality.IMAGE, Modality.VIDEO}
+    assert isinstance(impls[Modality.EMBEDDING], GoogleProvider)
+    assert isinstance(impls[Modality.IMAGE], GoogleMediaProvider)
+    # Image and video are two instances, not one: they hit different endpoints
+    # and the kind cannot be recovered from the model id.
+    assert impls[Modality.IMAGE] is not impls[Modality.VIDEO]
+    assert impls[Modality.IMAGE].kind == 'image'
+    assert impls[Modality.VIDEO].kind == 'video'
+
+
+def test_every_catalogued_media_host_actually_builds():
+    """A preset that names an adapter with no implementation behind it is a
+    connect button that fails after the key has been typed in."""
+    from openmirror.providers.catalog import HOSTS
+
+    for host in HOSTS:
+        wanted = host.modalities & {Modality.IMAGE, Modality.VIDEO}
+        if not wanted:
+            continue
+        _, impls = connections.build(connections.from_host(host.id, api_key='k:s'))
+        assert wanted <= set(impls), f'{host.id} presents {wanted} and builds {set(impls)}'
 
 
 # -- picking a model --------------------------------------------------------
@@ -201,10 +245,10 @@ async def test_a_query_is_embedded_as_a_query(tmp_path):
     memory service is the only layer that knows which is happening."""
     import tempfile
 
-    from roost.memory.service import MemoryService
-    from roost.memory.store import MemoryStore
-    from roost.providers.base import ProviderInfo
-    from roost.providers.registry import ProviderRegistry, Route, RouteSet
+    from openmirror.memory.service import MemoryService
+    from openmirror.memory.store import MemoryStore
+    from openmirror.providers.base import ProviderInfo
+    from openmirror.providers.registry import ProviderRegistry, Route, RouteSet
 
     registry = ProviderRegistry()
     recorder = Recorder()
@@ -240,7 +284,7 @@ def test_capabilities_are_read_from_wherever_the_build_puts_them():
     """Builds disagree, and reading only one place is indistinguishable from
     the model declaring nothing — which `can_serve` treats as "assume it can",
     which is how an embedding model gets picked for chat."""
-    from roost.providers.ollama import _capabilities
+    from openmirror.providers.ollama import _capabilities
 
     assert _capabilities({'capabilities': ['embedding']}) == ['embedding']
     assert _capabilities({'details': {'capabilities': ['tools']}}) == ['tools']
@@ -256,7 +300,7 @@ async def test_a_model_the_listing_did_not_classify_is_asked_about(monkeypatch):
     """`/api/tags` officially carries no capability field at all. Where a build
     honours that, every model comes back unclassified and the fallback is the
     only thing standing between an embedding model and the chat route."""
-    from roost.providers.ollama import OllamaProvider
+    from openmirror.providers.ollama import OllamaProvider
 
     provider = OllamaProvider('http://example.invalid')
     asked: list[str] = []
@@ -328,7 +372,7 @@ async def _models_with(provider, fake_tags, real_models):
 async def test_asking_twice_only_costs_one_request(monkeypatch):
     """A picker opening is not a reason to re-ask about every model, and a
     server with no `/api/show` must not be asked forever."""
-    from roost.providers.ollama import OllamaProvider
+    from openmirror.providers.ollama import OllamaProvider
 
     provider = OllamaProvider('http://example.invalid')
     calls: list[str] = []

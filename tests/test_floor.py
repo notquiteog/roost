@@ -1,6 +1,6 @@
 """The floor, and the qualifier that has to travel with it.
 
-Roost's features are built against a minimum — `qwen3.5:9b` or `gemma4:12b` for
+openmirror's features are built against a minimum — `qwen3.5:9b` or `gemma4:12b` for
 chat, `Qwen3-Embedding-4B` for memory. That much is an ordinary constant and
 needs little guarding.
 
@@ -31,8 +31,8 @@ from pathlib import Path
 
 import pytest
 
-from roost.agent.runtime import TOOLSETS
-from roost.providers import catalog
+from openmirror.agent.runtime import TOOLSETS
+from openmirror.providers import catalog
 
 
 def repo_root() -> Path:

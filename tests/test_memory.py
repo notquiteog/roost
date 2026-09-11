@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from roost.memory.store import EMBED_DIMS, MemoryStore, Settings, _project, _projection, _quantise
+from openmirror.memory.store import EMBED_DIMS, MemoryStore, Settings, _project, _projection, _quantise
 
 
 @pytest.fixture()
@@ -211,7 +211,7 @@ def _write_legacy_row(store, user_id: str, text: str, v):
 
     import numpy as _np
 
-    from roost.memory.store import _legacy_projection, _quantise
+    from openmirror.memory.store import _legacy_projection, _quantise
 
     key = store._ensure_key(user_id)
     v = _np.asarray(v, dtype=_np.float32)
@@ -400,22 +400,22 @@ def test_recall_can_be_scoped_to_a_project_or_a_task(store):
     """The reason `subject` exists, as opposed to `kind`.
 
     `kind` says what sort of thing a memory is; `subject` says what it attaches
-    to. "What do you know about the roost project" needs the second, and no
+    to. "What do you know about the openmirror project" needs the second, and no
     amount of kind alone expresses it.
     """
-    store.add('alice', 'roost uses sqlite for memory', vec(1000), kind='project', subject='roost')
+    store.add('alice', 'openmirror uses sqlite for memory', vec(1000), kind='project', subject='openmirror')
     store.add('alice', 'tern uses qdrant for memory', vec(1001), kind='project', subject='tern')
     store.add('alice', 'I prefer short commit subjects', vec(1002), kind='preference')
 
-    only_roost = store.search('alice', vec(1000), limit=10, min_score=0.0, subject='roost')
-    assert [m.text for m in only_roost] == ['roost uses sqlite for memory']
+    only_openmirror = store.search('alice', vec(1000), limit=10, min_score=0.0, subject='openmirror')
+    assert [m.text for m in only_openmirror] == ['openmirror uses sqlite for memory']
 
     # A kind filter and a subject filter are independent. `min_score=-1` so
     # this tests the FILTER rather than the similarity: two random vectors are
     # near-orthogonal, so the unrelated project would be dropped by the
     # threshold and the test would pass for the wrong reason.
     projects = store.search('alice', vec(1000), limit=10, min_score=-1.0, kind='project')
-    assert sorted(m.subject for m in projects) == ['roost', 'tern']
+    assert sorted(m.subject for m in projects) == ['openmirror', 'tern']
 
     # And a memory about the person carries no subject at all.
     prefs = store.list('alice', kind='preference')
@@ -434,18 +434,171 @@ def test_subject_survives_the_round_trip_through_the_index(store):
     the value never comes back out that way.
     """
     store.add('alice', 'about me', vec(1010))
-    store.add('alice', 'about roost', vec(1011), kind='project', subject='roost')
+    store.add('alice', 'about openmirror', vec(1011), kind='project', subject='openmirror')
 
     if store._vec:
         stored = dict(store._db.execute(
             'SELECT v.subject, m.text FROM memories_vec v JOIN memories m ON m.id = v.memory_id'
         ).fetchall())
-        assert stored == {'': 'about me', 'roost': 'about roost'}, (
+        assert stored == {'': 'about me', 'openmirror': 'about openmirror'}, (
             f'the index is not carrying the sentinel as expected: {stored}'
         )
 
     about_me = store.search('alice', vec(1010), limit=1, min_score=0.0)
     assert about_me[0].subject is None, 'the empty-string sentinel leaked out of the index'
 
-    about_roost = store.search('alice', vec(1011), limit=1, min_score=0.0, subject='roost')
-    assert about_roost[0].subject == 'roost'
+    about_openmirror = store.search('alice', vec(1011), limit=1, min_score=0.0, subject='openmirror')
+    assert about_openmirror[0].subject == 'openmirror'
+
+
+# -- the index: resetting it, and changing the model under it ----------------
+
+
+def test_an_unrecorded_store_adopts_the_embedder_rather_than_wiping(store):
+    """Upgrading must not cost anyone their memory.
+
+    A store written before the embedder was recorded has vectors made by
+    whatever is configured now — that is the only assumption available, and a
+    width change was already caught by `src_dim`. Wiping on first open would
+    punish the upgrade rather than the change.
+    """
+    store.set_settings('alice', enabled=True, auto_capture=False)
+    v = vec(1)
+    store.add('alice', 'a memory from before', v)
+
+    assert store.use_embedder('qwen3-embedding:4b') is None
+    assert store.embedder() == 'qwen3-embedding:4b'
+    assert [m.text for m in store.search('alice', v, limit=3)] == ['a memory from before']
+
+
+def test_the_same_embedder_twice_changes_nothing(store):
+    store.add('alice', 'x', vec(2))
+    assert store.use_embedder('m') is None
+    assert store.use_embedder('m') is None
+    assert store.index_state().searchable == 1
+
+
+def test_changing_the_embedder_wipes_the_vectors_and_keeps_the_text(store):
+    """The silent failure this whole mechanism exists for.
+
+    A new model's vectors live in a different space, and old vectors do not
+    *fail* against a new query — they score. So the store must discard them
+    rather than rank them, and it must keep the texts, which are the part the
+    user actually wrote.
+    """
+    v = vec(3)
+    store.use_embedder('model-a')
+    store.add('alice', 'something worth keeping', v)
+    assert store.search('alice', v, limit=3)
+
+    reset = store.use_embedder('model-b')
+    assert reset is not None
+    assert (reset.previous, reset.embedder, reset.discarded) == ('model-a', 'model-b', 1)
+
+    # Nothing is findable...
+    assert store.search('alice', v, limit=3) == []
+    # ...but nothing is lost, and the store says what is outstanding.
+    assert [m.text for m in store.list('alice')] == ['something worth keeping']
+    state = store.index_state()
+    assert (state.total, state.searchable, state.pending) == (1, 0, 1)
+
+
+def test_two_models_of_the_same_width_are_not_mixed(store):
+    """`src_dim` cannot catch this one, which is why `embedder` exists.
+
+    Both models are 384 wide, so every width check agrees and the projections
+    are identical. Only the recorded embedder separates them.
+    """
+    old = vec(4)
+    store.use_embedder('model-a')
+    store.add('alice', 'from model a', old)
+
+    store.use_embedder('model-b')
+    store.add('alice', 'from model b', vec(5))
+
+    # The model-a memory is not merely ranked low: it is not a candidate.
+    assert [m.text for m in store.search('alice', old, limit=10, min_score=-1.0)] == ['from model b']
+
+
+def test_a_discarded_vector_is_not_mistaken_for_a_legacy_row(store):
+    """`src_dim = -1` and `src_dim = 0` mean different things.
+
+    A legacy row gets un-scrambled and re-projected locally. Putting a
+    discarded row through that would read an empty blob as though it were a
+    vector, so the two sentinels must not collide.
+    """
+    store.use_embedder('model-a')
+    store.add('alice', 'x', vec(6))
+    store.use_embedder('model-b')
+    assert store.reproject_legacy_rows() == 0
+    assert store.index_state().pending == 1
+
+
+def test_a_reset_is_undone_by_putting_the_vectors_back(store):
+    v = vec(7)
+    store.use_embedder('model-a')
+    memory = store.add('alice', 'findable again', v)
+
+    assert store.discard_vectors() == 1
+    assert store.search('alice', v, limit=3) == []
+    assert [r[0] for r in store.pending_reembed()] == [memory.id]
+
+    assert store.set_vector(memory.id, v, 'model-a') is True
+    assert [m.text for m in store.search('alice', v, limit=3)] == ['findable again']
+    assert store.index_state().pending == 0
+
+
+def test_discarding_vectors_can_be_scoped_to_one_user(store):
+    a, b = vec(8), vec(9)
+    store.add('alice', 'hers', a)
+    store.add('bob', 'his', b)
+    assert store.discard_vectors('alice') == 1
+    assert store.search('alice', a, limit=3) == []
+    assert [m.text for m in store.search('bob', b, limit=3)] == ['his']
+
+
+def test_a_reset_empties_the_search_index_too(store):
+    """Otherwise a discarded vector still answers searches.
+
+    The same class of bug as a delete that leaves the index behind: it would
+    not look like a failure from anywhere.
+    """
+    if not store._vec:
+        pytest.skip('sqlite-vec is not loaded, so there is no second copy to empty')
+    store.add('alice', 'x', vec(10))
+    store.discard_vectors()
+    n = store._db.execute('SELECT COUNT(*) AS n FROM memories_vec').fetchone()['n']
+    assert n == 0
+
+
+def test_rebuilding_the_index_does_not_touch_the_memories(store):
+    if not store._vec:
+        pytest.skip('sqlite-vec is not loaded, so there is no index to rebuild')
+    v = vec(11)
+    store.add('alice', 'still here', v)
+    store.add('alice', 'also here', vec(12))
+
+    assert store.rebuild_index() == 2
+    assert store.index_state().searchable == 2
+    assert [m.text for m in store.search('alice', v, limit=1)] == ['still here']
+
+
+def test_an_embedder_change_is_noticed_at_open(store):
+    """The check has to run where a store is opened, not only where it is built.
+
+    A process that starts with a different model configured must not be able to
+    reach a search before the stale vectors are gone.
+    """
+    v = vec(13)
+    store.use_embedder('model-a')
+    store.add('alice', 'x', v)
+    path = store.path
+    store.close()
+
+    reopened = MemoryStore(path, embedder='model-b')
+    try:
+        assert reopened.reset is not None
+        assert reopened.reset.discarded == 1
+        assert reopened.search('alice', v, limit=3) == []
+    finally:
+        reopened.close()

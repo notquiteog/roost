@@ -59,6 +59,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: roost-${{ matrix.target }}
+          name: openmirror-${{ matrix.target }}
           path: |
             desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*

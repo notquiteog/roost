@@ -16,10 +16,10 @@ from pathlib import Path
 
 import pytest
 
-from roost.agent.tools.base import ToolContext, ToolError
-from roost.agent.tools.system import PackageInstallTool, PackageRemoveTool, _elevate
-from roost.protocol.agent import Risk
-from roost.system import (
+from openmirror.agent.tools.base import ToolContext, ToolError
+from openmirror.agent.tools.system import PackageInstallTool, PackageRemoveTool, _elevate
+from openmirror.protocol.agent import Risk
+from openmirror.system import (
     LINUX_MANAGERS,
     WINDOWS_MANAGERS,
     Platform,

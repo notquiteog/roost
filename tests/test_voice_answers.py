@@ -16,8 +16,8 @@ import asyncio
 
 import pytest
 
-from roost.voice.answers import Answer, how_to_answer, interpret
-from roost.voice.pipeline import Waiting, _spoken_approval, _spoken_question
+from openmirror.voice.answers import Answer, how_to_answer, interpret
+from openmirror.voice.pipeline import Waiting, _spoken_approval, _spoken_question
 
 # -- reading a reply --------------------------------------------------------
 
@@ -127,7 +127,7 @@ def session(agent):
     Built without calling `__init__`, because everything that matters here is
     `_answer`, and the constructor would want an STT, a TTS and a model.
     """
-    from roost.voice.pipeline import VoiceSession
+    from openmirror.voice.pipeline import VoiceSession
 
     voice = VoiceSession.__new__(VoiceSession)
     voice.agent = agent
@@ -244,12 +244,12 @@ async def test_a_suspended_turn_speaks_and_then_finishes_when_answered(tmp_path)
     part that would break if the generator stopped when the turn suspended,
     because the agent would be left waiting on a future nobody resolves.
     """
-    from roost.agent.approval import Mode
-    from roost.agent.runtime import build_session
-    from roost.agent.tools.base import Assessment, Output, Tool
-    from roost.protocol.agent import Risk
-    from roost.providers.base import StreamDone, StreamText, StreamToolUse
-    from roost.voice.pipeline import VoiceConfig, VoiceSession
+    from openmirror.agent.approval import Mode
+    from openmirror.agent.runtime import build_session
+    from openmirror.agent.tools.base import Assessment, Output, Tool
+    from openmirror.protocol.agent import Risk
+    from openmirror.providers.base import StreamDone, StreamText, StreamToolUse
+    from openmirror.voice.pipeline import VoiceConfig, VoiceSession
     from tests.test_agent import ScriptedProvider
 
     class Spender(Tool):

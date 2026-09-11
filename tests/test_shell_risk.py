@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from roost.agent.tools.shell import classify
+from openmirror.agent.tools.shell import classify
 
 READS = [
     'ls -la', 'git status', 'git log --oneline -20', 'cat README.md | grep foo',
@@ -138,7 +138,7 @@ def test_process_control_is_portable():
     """
     import sys
 
-    from roost.agent.tools.shell import WINDOWS, _spawn_kwargs
+    from openmirror.agent.tools.shell import WINDOWS, _spawn_kwargs
 
     kwargs = _spawn_kwargs()
     assert WINDOWS == (sys.platform == 'win32')
@@ -153,7 +153,7 @@ def test_no_posix_only_calls_outside_the_platform_guard():
     only inside the branch that is never taken there."""
     import inspect
 
-    from roost.agent.tools import shell
+    from openmirror.agent.tools import shell
 
     source = inspect.getsource(shell)
     for call in ('os.killpg', 'os.getpgid'):

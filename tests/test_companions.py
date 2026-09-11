@@ -19,9 +19,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-COMPANIONS = ROOT / 'roost' / 'static' / 'companions'
+COMPANIONS = ROOT / 'openmirror' / 'static' / 'companions'
 CREATURES = sorted(p for p in COMPANIONS.glob('*.js') if p.name not in {'engine.js', 'index.js'})
-TOOLS = ROOT / 'roost' / 'agent' / 'tools'
+TOOLS = ROOT / 'openmirror' / 'agent' / 'tools'
 
 
 def _span(src: str, start: int) -> tuple[int, int]:

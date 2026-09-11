@@ -9,12 +9,12 @@ from __future__ import annotations
 import asyncio
 import tempfile
 
-from roost.agent.approval import Mode
-from roost.agent.runtime import TOOLSETS, build_session, resolve_toolset
-from roost.agent.session import REPEAT_STOP
-from roost.agent.tools.base import Assessment, Output, Tool
-from roost.protocol.agent import Risk, ToolDenied
-from roost.providers.base import StreamDone, StreamText, StreamToolUse
+from openmirror.agent.approval import Mode
+from openmirror.agent.runtime import TOOLSETS, build_session, resolve_toolset
+from openmirror.agent.session import REPEAT_STOP
+from openmirror.agent.tools.base import Assessment, Output, Tool
+from openmirror.protocol.agent import Risk, ToolDenied
+from openmirror.providers.base import StreamDone, StreamText, StreamToolUse
 from tests.test_agent import ScriptedProvider, drain
 
 

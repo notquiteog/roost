@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from roost.agent.tools.browser import classify_click, classify_field
-from roost.protocol.agent import Risk
+from openmirror.agent.tools.browser import classify_click, classify_field
+from openmirror.protocol.agent import Risk
 
 
 def el(**kw):

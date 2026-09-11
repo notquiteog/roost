@@ -15,11 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from roost.agent.tools.base import ToolContext
-from roost.agent.tools.mcp import mcp_tools, qualified_name
-from roost.mcp.client import MCPError, StdioServer
-from roost.mcp.manager import MCPManager, ServerConfig, load_config
-from roost.protocol.agent import Risk
+from openmirror.agent.tools.base import ToolContext
+from openmirror.agent.tools.mcp import mcp_tools, qualified_name
+from openmirror.mcp.client import MCPError, StdioServer
+from openmirror.mcp.manager import MCPManager, ServerConfig, load_config
+from openmirror.protocol.agent import Risk
 
 SERVER = Path(__file__).parent / 'fixtures' / 'mcp_server.py'
 

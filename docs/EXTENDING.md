@@ -4,7 +4,7 @@ Two mechanisms, and one thing that undoes what they do.
 
 ## MCP servers
 
-Roost is an MCP client, so any MCP server becomes tools the agent can use.
+openmirror is an MCP client, so any MCP server becomes tools the agent can use.
 Servers are read from a `.mcp.json` in the shape the rest of the ecosystem
 already uses, which means a file written for another client works here
 unchanged:

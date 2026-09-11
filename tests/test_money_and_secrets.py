@@ -21,16 +21,16 @@ import shutil
 
 import pytest
 
-from roost.agent.approval import ApprovalPolicy, Decision, Mode
-from roost.agent.browser import BrowserConfig, BrowserSession
-from roost.agent.tools.base import ToolContext
-from roost.agent.tools.browser import (
+from openmirror.agent.approval import ApprovalPolicy, Decision, Mode
+from openmirror.agent.browser import BrowserConfig, BrowserSession
+from openmirror.agent.tools.base import ToolContext
+from openmirror.agent.tools.browser import (
     BrowserNavigateTool,
     BrowserReadTool,
     BrowserTypeTool,
     classify_field,
 )
-from roost.protocol.agent import Risk, ToolCall
+from openmirror.protocol.agent import Risk, ToolCall
 from tests.fixtures.hotels import HotelSite
 
 SECRET = 'hunter2-do-not-print-me'
@@ -144,7 +144,7 @@ async def test_a_typed_secret_is_not_echoed_anywhere(tmp_path):
     except ImportError:
         pytest.skip('playwright is not installed')
 
-    from roost.agent.stage import VirtualStage
+    from openmirror.agent.stage import VirtualStage
 
     stage = VirtualStage(1024, 768)
     browser = BrowserSession(

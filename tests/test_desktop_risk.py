@@ -12,9 +12,9 @@ import time
 
 import pytest
 
-from roost.agent.stage import Rect
-from roost.agent.tools.desktop import STALE_AFTER, desktop_tools
-from roost.protocol.agent import Risk
+from openmirror.agent.stage import Rect
+from openmirror.agent.tools.desktop import STALE_AFTER, desktop_tools
+from openmirror.protocol.agent import Risk
 
 
 class FakeStage:
@@ -71,7 +71,7 @@ async def noask(*a):
 
 
 def ctx(tmp_path):
-    from roost.agent.tools.base import ToolContext
+    from openmirror.agent.tools.base import ToolContext
 
     return ToolContext(root=tmp_path, cwd=tmp_path, emit=noop, ask=noask, session_id='t')
 

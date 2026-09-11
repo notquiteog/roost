@@ -14,11 +14,11 @@ parser fails loudly here instead of quietly passing.
 import re
 from pathlib import Path
 
-from roost.agent.approval import Mode
+from openmirror.agent.approval import Mode
 
 ROOT = Path(__file__).resolve().parent.parent
-STATIC = ROOT / 'roost' / 'static'
-TOOLS = ROOT / 'roost' / 'agent' / 'tools'
+STATIC = ROOT / 'openmirror' / 'static'
+TOOLS = ROOT / 'openmirror' / 'agent' / 'tools'
 
 
 def _tool_names() -> set[str]:

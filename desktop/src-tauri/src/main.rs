@@ -1,6 +1,6 @@
-// Roost's desktop shell.
+// openmirror's desktop shell.
 //
-// This deliberately contains no application logic. Everything Roost does — the
+// This deliberately contains no application logic. Everything openmirror does — the
 // agent, the providers, voice, the browser, desktop control — lives in the
 // Python daemon, and this is a window onto it plus the three things a browser
 // tab genuinely cannot do: live in the tray, survive being closed, and put a
@@ -25,7 +25,7 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 struct Daemon(Mutex<Option<Child>>);
 
 fn base_url() -> String {
-    let port = std::env::var("ROOST_PORT").unwrap_or_else(|_| "8477".into());
+    let port = std::env::var("OPENMIRROR_PORT").unwrap_or_else(|_| "8477".into());
     format!("http://127.0.0.1:{port}")
 }
 
@@ -41,13 +41,13 @@ fn daemon_is_up(url: &str) -> bool {
     .is_ok()
 }
 
-/// Start the daemon, preferring an installed `roost` over a source checkout.
+/// Start the daemon, preferring an installed `openmirror` over a source checkout.
 fn spawn_daemon() -> Option<Child> {
     let candidates: Vec<(String, Vec<String>)> = vec![
-        ("roost".into(), vec![]),
+        ("openmirror".into(), vec![]),
         (
-            std::env::var("ROOST_PYTHON").unwrap_or_else(|_| "python3".into()),
-            vec!["-m".into(), "roost.main".into()],
+            std::env::var("OPENMIRROR_PYTHON").unwrap_or_else(|_| "python3".into()),
+            vec!["-m".into(), "openmirror.main".into()],
         ),
     ];
 
@@ -59,10 +59,10 @@ fn spawn_daemon() -> Option<Child> {
             .spawn()
         {
             Ok(child) => {
-                eprintln!("roost: started daemon via {program}");
+                eprintln!("openmirror: started daemon via {program}");
                 return Some(child);
             }
-            Err(err) => eprintln!("roost: could not start {program}: {err}"),
+            Err(err) => eprintln!("openmirror: could not start {program}: {err}"),
         }
     }
     None
@@ -85,7 +85,7 @@ fn main() {
     // Attach if one is already running; only start one if not. This is what
     // lets the app coexist with a systemd-managed daemon.
     let owned = if daemon_is_up(&url) {
-        eprintln!("roost: attaching to the daemon already on {url}");
+        eprintln!("openmirror: attaching to the daemon already on {url}");
         None
     } else {
         spawn_daemon()
@@ -97,12 +97,12 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .manage(Daemon(Mutex::new(owned)))
         .setup(move |app| {
-            let transparent = std::env::var("ROOST_TRANSPARENT")
+            let transparent = std::env::var("OPENMIRROR_TRANSPARENT")
                 .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
                 .unwrap_or(false);
 
             if !wait_until_up(&url, Duration::from_secs(30)) {
-                eprintln!("roost: the daemon did not come up on {url}");
+                eprintln!("openmirror: the daemon did not come up on {url}");
             }
 
             let window = WebviewWindowBuilder::new(
@@ -110,7 +110,7 @@ fn main() {
                 "main",
                 WebviewUrl::External(url.parse().expect("bad daemon url")),
             )
-            .title("Roost")
+            .title("openmirror")
             .inner_size(1200.0, 820.0)
             .min_inner_size(720.0, 520.0)
             // Transparency lets the page's own glass blur the real desktop
@@ -122,7 +122,7 @@ fn main() {
             .transparent(transparent)
             .decorations(true)
             .build()
-            .inspect_err(|e| eprintln!("roost: window build failed: {e}"))?;
+            .inspect_err(|e| eprintln!("openmirror: window build failed: {e}"))?;
             let _ = window.show();
             if transparent {
                 // Told, not sniffed: the page cannot see the window's own
@@ -142,13 +142,13 @@ fn main() {
                 }
             });
 
-            let show = MenuItem::with_id(app, "show", "Show Roost", true, None::<&str>)?;
+            let show = MenuItem::with_id(app, "show", "Show openmirror", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("Roost")
+                .tooltip("openmirror")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -177,13 +177,13 @@ fn main() {
                     }
                 })
                 .build(app)
-                .inspect_err(|e| eprintln!("roost: tray build failed: {e}"))?;
+                .inspect_err(|e| eprintln!("openmirror: tray build failed: {e}"))?;
 
             Ok(())
         })
         .on_window_event(|_window, _event| {})
         .build(tauri::generate_context!())
-        .expect("failed to build the Roost shell")
+        .expect("failed to build the openmirror shell")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // Only ours. A daemon this process did not start keeps running,

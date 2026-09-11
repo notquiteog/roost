@@ -7,15 +7,15 @@ import struct
 
 import pytest
 
-from roost.protocol.voice import (
+from openmirror.protocol.voice import (
     SpeechStarted,
     SynthesisCancelled,
     SynthesisStarted,
     SynthesisStopped,
     TranscriptFinal,
 )
-from roost.providers.base import StreamDone, StreamText, Transcript
-from roost.voice.pipeline import (
+from openmirror.providers.base import StreamDone, StreamText, Transcript
+from openmirror.voice.pipeline import (
     VoiceConfig,
     VoiceSession,
     is_meaningful,
@@ -29,9 +29,11 @@ class FakeSTT:
     def __init__(self, text='delete the build directory'):
         self.text = text
         self.calls = 0
+        self.seen: list[bytes] = []
 
     async def transcribe(self, audio, *, model, language=None):
         self.calls += 1
+        self.seen.append(audio)
         return Transcript(text=self.text)
 
 
@@ -230,3 +232,37 @@ async def test_silence_transcribed_as_filler_is_not_answered():
     final = [e for e in events if isinstance(e, TranscriptFinal)]
     assert final and not final[0].submitted
     assert llm.started == 0
+
+
+@pytest.mark.asyncio
+async def test_a_discarded_cough_stops_the_capture():
+    """A burst too short to be speech must close the capture, not orphan it.
+
+    The detector drops an utterance under `min_speech_ms` by reporting
+    nothing at all, which used to leave the session capturing for the rest of
+    the call: every later frame appended to an utterance nobody would send,
+    and none of them reaching the pre-roll — so the next real sentence
+    arrived with its first word missing, which is the one thing the pre-roll
+    buffer exists to prevent.
+    """
+    stt = FakeSTT('what is the time')
+    session, events, _ = build(SlowLLM('It is four.', delay=0.01), stt=stt)
+
+    await session.feed(noise(600, amplitude=0.002))
+    await session.feed(tone(120, amplitude=0.4))       # a cough, under min_speech_ms
+    await session.feed(noise(900, amplitude=0.002))
+
+    assert not [e for e in events if isinstance(e, TranscriptFinal)]
+    assert not session._capturing, 'still capturing after a discarded burst'
+    assert not session._utterance, 'audio accumulating into an utterance nobody will send'
+
+    # And the next real sentence still gets its pre-roll.
+    await session.feed(noise(600, amplitude=0.002))
+    await session.feed(tone(800, amplitude=0.3))
+    await session.feed(noise(900, amplitude=0.002))
+
+    final = [e for e in events if isinstance(e, TranscriptFinal)]
+    assert final and final[0].submitted
+    # Pre-roll plus the 800 ms burst plus the hangover, not a whole call of noise.
+    assert len(stt.seen[0]) < 2 * 16_000 * 3, 'utterance carries audio from before it began'
+    await asyncio.wait_for(session._reply, timeout=10)

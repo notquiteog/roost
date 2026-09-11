@@ -7,10 +7,10 @@ import tempfile
 
 import pytest
 
-from roost.agent.approval import Mode
-from roost.agent.manager import SessionManager
-from roost.protocol.agent import SessionStarted, TextDelta, ToolProposed, TurnCompleted
-from roost.providers.base import StreamDone, StreamText, StreamToolUse
+from openmirror.agent.approval import Mode
+from openmirror.agent.manager import SessionManager
+from openmirror.protocol.agent import SessionStarted, TextDelta, ToolProposed, TurnCompleted
+from openmirror.providers.base import StreamDone, StreamText, StreamToolUse
 from tests.test_agent import ScriptedProvider
 
 

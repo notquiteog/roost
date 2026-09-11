@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from roost.agent.stage import (
+from openmirror.agent.stage import (
     Monitor,
     Rect,
     StageUnavailable,
@@ -63,7 +63,7 @@ def test_naming_a_monitor_that_is_not_there_says_which_are(monkeypatch):
     """An agent confined to "monitor 3" on a two-monitor machine must not
     quietly get monitor 1."""
     monkeypatch.setattr(
-        'roost.agent.stage.monitors',
+        'openmirror.agent.stage.monitors',
         lambda display='': [
             Monitor('DP-3', Rect(0, 0, 2560, 1440), primary=True),
             Monitor('HDMI-1', Rect(2560, 0, 1920, 1080)),
@@ -83,7 +83,7 @@ def test_naming_a_monitor_that_is_not_there_says_which_are(monkeypatch):
 def test_being_unable_to_enumerate_is_an_error_not_a_free_pass(monkeypatch):
     """Silently using the whole desktop when someone asked for one monitor is
     the failure this refuses to make."""
-    monkeypatch.setattr('roost.agent.stage.monitors', lambda display='': [])
+    monkeypatch.setattr('openmirror.agent.stage.monitors', lambda display='': [])
     with pytest.raises(StageUnavailable, match='could not be enumerated'):
         pick_monitor('1')
 
@@ -138,7 +138,7 @@ def test_a_virtual_stage_does_not_outlive_its_owner():
     script = textwrap.dedent("""
         import sys, time, warnings
         warnings.filterwarnings('ignore')
-        from roost.agent.stage import VirtualStage
+        from openmirror.agent.stage import VirtualStage
         stage = VirtualStage(320, 240)
         print(stage._proc.pid, flush=True)
         time.sleep(60)

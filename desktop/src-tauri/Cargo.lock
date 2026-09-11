@@ -2946,7 +2946,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "roost-desktop"
+name = "openmirror-desktop"
 version = "0.1.0"
 dependencies = [
  "serde",

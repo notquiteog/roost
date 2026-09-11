@@ -29,17 +29,17 @@ import shutil
 
 import pytest
 
-from roost.agent.approval import ApprovalPolicy, Decision, Mode
-from roost.agent.browser import BrowserConfig, BrowserSession
-from roost.agent.tools.base import ToolContext
-from roost.agent.tools.browser import (
+from openmirror.agent.approval import ApprovalPolicy, Decision, Mode
+from openmirror.agent.browser import BrowserConfig, BrowserSession
+from openmirror.agent.tools.base import ToolContext
+from openmirror.agent.tools.browser import (
     BrowserClickTool,
     BrowserNavigateTool,
     BrowserReadTool,
     BrowserTypeTool,
 )
-from roost.agent.tools.desktop import desktop_tools
-from roost.protocol.agent import Risk, ToolCall
+from openmirror.agent.tools.desktop import desktop_tools
+from openmirror.protocol.agent import Risk, ToolCall
 from tests.fixtures.hotels import HotelSite
 
 pytestmark = pytest.mark.asyncio
@@ -80,7 +80,7 @@ async def test_it_books_up_to_the_point_of_paying(tmp_path):
 
     import os
 
-    from roost.agent.stage import _X11, VirtualStage
+    from openmirror.agent.stage import _X11, VirtualStage
 
     # Where the real pointer is now. The whole promise is that this does not
     # move, so it is read before anything starts.
@@ -275,7 +275,7 @@ async def test_a_date_field_is_set_rather_than_typed_into(tmp_path):
     while holding a URL that contained it.
     """
     _needs()
-    from roost.agent.stage import VirtualStage
+    from openmirror.agent.stage import VirtualStage
 
     stage = VirtualStage(1000, 700)
     browser = BrowserSession(
@@ -316,7 +316,7 @@ async def test_a_click_outside_the_stage_is_refused(tmp_path):
     button belonging to something nobody asked it to touch.
     """
     _needs()
-    from roost.agent.stage import VirtualStage
+    from openmirror.agent.stage import VirtualStage
 
     stage = VirtualStage(800, 600)
     try:
@@ -343,7 +343,7 @@ async def test_the_agent_is_told_whose_screen_it_is_on(tmp_path):
     row, on the run that removed it.
     """
     _needs()
-    from roost.agent.stage import VirtualStage
+    from openmirror.agent.stage import VirtualStage
 
     stage = VirtualStage(640, 480)
     try:

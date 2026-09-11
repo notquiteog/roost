@@ -9,10 +9,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from roost.memory.service import MemoryService, _candidate_facts
-from roost.memory.store import MemoryStore
-from roost.providers.base import Modality, ProviderInfo
-from roost.providers.registry import ProviderRegistry
+from openmirror.memory.service import MemoryService, _candidate_facts
+from openmirror.memory.store import MemoryStore
+from openmirror.providers.base import Modality, ProviderInfo
+from openmirror.providers.registry import ProviderRegistry
 
 
 class FakeEmbedder:
@@ -191,9 +191,9 @@ async def test_a_remembered_fact_reaches_the_system_prompt():
     database, not a memory."""
     import tempfile as _tempfile
 
-    from roost.agent.approval import Mode
-    from roost.agent.runtime import build_session
-    from roost.providers.base import StreamDone, StreamText
+    from openmirror.agent.approval import Mode
+    from openmirror.agent.runtime import build_session
+    from openmirror.providers.base import StreamDone, StreamText
     from tests.test_agent import ScriptedProvider
 
     svc, _, tmp = build()
@@ -225,8 +225,8 @@ async def test_no_memory_tools_when_it_is_switched_off():
     wastes a step every turn."""
     import tempfile as _tempfile
 
-    from roost.agent.approval import Mode
-    from roost.agent.runtime import build_session
+    from openmirror.agent.approval import Mode
+    from openmirror.agent.runtime import build_session
     from tests.test_agent import ScriptedProvider
 
     svc, _, tmp = build()
@@ -237,3 +237,138 @@ async def test_no_memory_tools_when_it_is_switched_off():
         )
         assert 'remember' not in session.tools
         assert 'recall' not in session.tools
+
+
+# -- the index, and a changed embedding model --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_embedder_fingerprint_includes_the_requested_width():
+    """A truncatable model at 512 is not the same embedder as at full width.
+
+    Same model name, incomparable vectors — so the name alone is not an
+    identity, and recording only the name would miss the change entirely.
+    """
+    from openmirror.memory.service import _fingerprint
+
+    assert _fingerprint('text-embedding-3-large', None) == 'text-embedding-3-large'
+    assert _fingerprint('text-embedding-3-large', 512) == 'text-embedding-3-large@512'
+
+    svc, _embedder, tmp = build()
+    try:
+        assert svc.embedder() == 'fake-embed'
+    finally:
+        tmp.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_changing_the_model_mid_session_resets_and_re_embeds():
+    """End to end: the model moves, recall goes quiet, a re-embed restores it.
+
+    Recall going *quiet* is the point. The alternative is recall that answers
+    from the old model's vectors, which looks like a working memory and is not.
+    """
+    svc, _embedder, tmp = build()
+    try:
+        svc.set_settings('alice', enabled=True, auto_capture=False)
+        await svc.remember('alice', 'deploys go out on Thursday afternoons')
+        found = await svc.recall('alice', 'when do deploys go out')
+        assert [m.text for m in found.memories]
+
+        # The embedding route is re-pointed at another model.
+        svc.model = 'a-different-embedder'
+
+        empty = await svc.recall('alice', 'when do deploys go out')
+        assert empty.memories == []
+        assert 'embedding model changed' in empty.reason
+        assert svc.index_state().pending == 1
+
+        done = await svc.reembed()
+        assert done == {'embedded': 1, 'failed': 0}
+
+        again = await svc.recall('alice', 'when do deploys go out')
+        assert [m.text for m in again.memories] == ['deploys go out on Thursday afternoons']
+        assert svc.index_state().embedder == 'a-different-embedder'
+    finally:
+        tmp.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_a_reset_keeps_every_memory():
+    svc, _embedder, tmp = build()
+    try:
+        svc.set_settings('alice', enabled=True, auto_capture=False)
+        for text in ('I always use ripgrep', 'my staging database runs on port 6543'):
+            await svc.remember('alice', text)
+
+        out = await svc.reset_index()
+        assert out == {'discarded': 2, 'embedded': 2, 'failed': 0}
+        assert svc.store.count('alice') == 2
+        assert svc.index_state().pending == 0
+    finally:
+        tmp.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_a_reset_without_re_embedding_leaves_the_work_pending():
+    """Asking for the wipe alone is allowed, and does not lose the texts."""
+    svc, _embedder, tmp = build()
+    try:
+        svc.set_settings('alice', enabled=True, auto_capture=False)
+        await svc.remember('alice', 'I prefer tabs, and I know')
+
+        out = await svc.reset_index(reembed=False)
+        assert out == {'discarded': 1, 'embedded': 0, 'failed': 0}
+        assert svc.index_state().pending == 1
+        assert svc.store.count('alice') == 1
+    finally:
+        tmp.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_a_provider_that_is_down_leaves_the_re_embed_for_next_time():
+    """Stopping early must not lose rows.
+
+    A failed batch leaves its rows pending, so the next call resumes. The
+    alternative — marking them done, or hammering the provider for every
+    remaining batch — either loses memories or turns one outage into thousands
+    of failed calls.
+    """
+    svc, embedder, tmp = build()
+    try:
+        svc.set_settings('alice', enabled=True, auto_capture=False)
+        await svc.remember('alice', 'I always run the tests before pushing')
+        await svc.reset_index(reembed=False)
+
+        embedder.fail = True
+        assert await svc.reembed() == {'embedded': 0, 'failed': 1}
+        assert svc.index_state().pending == 1
+
+        embedder.fail = False
+        assert await svc.reembed() == {'embedded': 1, 'failed': 0}
+        assert svc.index_state().pending == 0
+    finally:
+        tmp.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_no_embedding_provider_means_the_store_is_left_alone():
+    """An install with nothing routed to embeddings must not lose its vectors.
+
+    `sync_embedder` runs at start-up, before anyone has necessarily configured
+    a provider, and a wipe triggered by a missing configuration would destroy
+    the index of someone who was only halfway through setting openmirror up.
+    """
+    svc, _embedder, tmp = build()
+    try:
+        svc.set_settings('alice', enabled=True, auto_capture=False)
+        await svc.remember('alice', 'I always use ripgrep')
+        before = svc.index_state().searchable
+
+        svc.model = ''
+        svc.registry = ProviderRegistry()  # nothing routed to embeddings at all
+        assert svc.embedder() == ''
+        assert svc.sync_embedder() is None
+        assert svc.index_state().searchable == before
+    finally:
+        tmp.cleanup()

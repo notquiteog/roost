@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from roost.agent.approval import Mode
-from roost.agent.checkpoint import CheckpointStore
-from roost.agent.runtime import build_session
-from roost.providers.base import StreamDone, StreamText, StreamToolUse
+from openmirror.agent.approval import Mode
+from openmirror.agent.checkpoint import CheckpointStore
+from openmirror.agent.runtime import build_session
+from openmirror.providers.base import StreamDone, StreamText, StreamToolUse
 from tests.test_agent import ScriptedProvider
 
 
@@ -148,7 +148,7 @@ def test_identical_content_is_stored_once(store, tmp_path):
 
 def test_a_very_large_file_is_skipped(store, tmp_path, monkeypatch):
     """A 200 MB artefact should not cost 200 MB per turn."""
-    import roost.agent.checkpoint as mod
+    import openmirror.agent.checkpoint as mod
 
     monkeypatch.setattr(mod, 'MAX_SNAPSHOT_BYTES', 32)
     big = tmp_path / 'big.bin'
@@ -191,7 +191,7 @@ async def test_a_turn_is_undoable_end_to_end():
         await session.start()
 
         # write_file refuses a file it has not read, so seed the journal.
-        from roost.agent.tools.files import journal
+        from openmirror.agent.tools.files import journal
         journal.note_read(session.id, root / 'notes.txt')
 
         session.submit('overwrite the notes')
@@ -229,7 +229,7 @@ async def test_an_interrupted_turn_is_still_undoable():
         session.checkpoints = store
         await session.start()
 
-        from roost.agent.tools.files import journal
+        from openmirror.agent.tools.files import journal
         journal.note_read(session.id, root / 'a.txt')
 
         session.submit('write then hang')

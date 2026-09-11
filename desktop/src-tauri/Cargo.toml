@@ -1,7 +1,7 @@
 [package]
-name = "roost-desktop"
+name = "openmirror-desktop"
 version = "0.1.0"
-description = "Desktop shell for Roost"
+description = "Desktop shell for openmirror, an open-source digital twin"
 edition = "2021"
 rust-version = "1.77"
 

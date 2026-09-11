@@ -1,23 +1,26 @@
-# Roost
+# openmirror
 
-**An agent harness for every common AI endpoint.** One place that can act on
-your machine, hold a spoken conversation, and let you pick — separately, per
-kind of generation — whether that runs on your own hardware, on OpenAI, on
-Anthropic, or on anything else that speaks a shape it already knows.
+**An open-source digital twin.** Something that lives on your own machine and
+acts there the way you would — running commands, driving a browser, holding a
+spoken conversation, and (when you switch it on) remembering what it learns
+about you between them. The *open* is the load-bearing half of the name: every
+part of the reflection is one you can read, replace, route somewhere else or
+turn off.
 
-It is the companion to [Perch](https://github.com/notquiteog/perch), which is
-where the local models live, and it interoperates with
-[Open WebUI](https://github.com/open-webui/open-webui) in both directions.
+Which is why nothing here is hosted on your behalf. You pick — separately, per
+kind of generation — whether the thinking, the listening, the speaking and the
+picture-making run on your own hardware, on OpenAI, on Anthropic, or on
+anything else that speaks a shape it already knows.
 
 ```
-                                   ┌────────────────────────────────────────┐
-   you ── websocket ──▶  Roost  ───┤  chat       Perch │ Anthropic │ OpenAI │
-                          │        │  embedding  Perch │ Voyage    │ Gemini │
-                          │        │  dictation  Perch │ OpenAI    │ Groq   │
-                    ┌─────┴─────┐  │  speech     Perch │ OpenAI            │
-                    │  agent    │  │  images     Perch │ OpenAI            │
-                    │  voice    │  │  video      Perch                     │
-                    └───────────┘  └────────────────────────────────────────┘
+                                   ┌──────────────────────────────────────────────┐
+you ── websocket ──▶ openmirror ───┤  chat       Perch │ Anthropic │ OpenAI       │
+                          │        │  embedding  Perch │ Voyage    │ Gemini       │
+                          │        │  dictation  Perch │ OpenAI    │ Groq         │
+                    ┌─────┴─────┐  │  speech     Perch │ OpenAI                   │
+                    │  agent    │  │  images     Perch │ 17 others  ── see below  │
+                    │  voice    │  │  video      Perch │  9 others                │
+                    └───────────┘  └──────────────────────────────────────────────┘
                      runs commands       one choice per row, made separately,
                      on this machine     enforced when the route resolves
 ```
@@ -69,7 +72,7 @@ When an utterance is cut off, history records only what you actually heard.
 
 **Provider choice per modality.** Chat on Anthropic, dictation on your own
 whisper, speech on your own Kokoro, images on your own Stable Diffusion — or
-any other combination. `ROOST_LOCAL_ONLY` is enforced where a route is
+any other combination. `OPENMIRROR_LOCAL_ONLY` is enforced where a route is
 resolved rather than in a UI: with it on, a local backend being down is an
 error, never a quiet fallback to a hosted one.
 
@@ -193,18 +196,38 @@ click, for the desktop tools to finish. COSMIC's own `cosmic-randr` has no HDR
 subcommand; pretending there is a universal command is how an agent ends up
 inventing one, running it, and inventing another.
 
-**Images and video, tuned as far as you like.** The panel is drawn from what
-the backend says it has: ask A1111 and its own samplers, schedulers,
-upscalers and LoRA names come back as controls, with a sentence each. Nothing
-in the client knows what a sampler is, so installing one on the diffusion box
-adds it to the dropdown with no release in between. ComfyUI templates mark
-their inputs with tokens and the form follows from which tokens are present —
-so a new video model is one file, and a "Save (API format)" export can be
-imported and tokenised for you. Every result is stored as a file plus its
-recipe, including the seed the backend actually used, because a picture you
-cannot reproduce is one you cannot iterate on.
+**Images and video, from almost anywhere, tuned as far as you like.** The
+panel is drawn from what the backend says it has — nothing in the client knows
+what a sampler is, so installing one on the diffusion box adds it to the
+dropdown with no release in between.
 
-**The desktop itself, without taking your mouse.** `ROOST_DESKTOP=true` adds
+Eighteen image backends and ten video ones, and the reason it is not a list
+somebody has to keep extending is that **the form comes from the model**:
+
+| | |
+|---|---|
+| **Your own hardware** | AUTOMATIC1111 (txt2img, img2img and inpainting) and ComfyUI, whose templates mark their inputs with tokens so the form follows from which tokens are present — a new video model is one file, and a "Save (API format)" export is imported and tokenised for you |
+| **Everything else, twice over** | Replicate and fal each host most of the field, and each **publishes an input schema per model** — so a model released this morning arrives with its real ranges, its real enums and its author's own description of every knob, with nothing added here |
+| **First party, where they have something the resellers drop** | OpenAI (gpt-image-1, and Sora for video) · Google (Imagen, the conversational image model, and Veo) · Black Forest Labs (FLUX, and Kontext for editing) · Stability · Ideogram, for when the picture has words in it · Recraft, for real vectors · Runway, whose tagged reference images survive nowhere else · Luma, for camera language and keyframes · Kling, for motion that obeys physics · MiniMax, whose Director models take shot instructions inline · xAI, Together, Fireworks, DeepInfra |
+
+Both kinds are jobs: started, watched and **cancellable at the provider**,
+because a render nobody stopped is a GPU working for nobody and a hosted
+account still being billed. What each one reports about its own progress is
+what it honestly knows — a fraction from Runway and Sora, a queue position
+from fal and ComfyUI, elapsed seconds from Veo, which reports nothing — and
+never a bar that creeps to ninety and stops.
+
+Pictures go *in* as well as out: a reference image, a frame to start from, a
+frame to end on, a mask. Every result is stored as a file plus its recipe,
+including the seed the backend actually used, and the recipe is a **button** —
+one click puts the whole thing back in the form, because changing one thing
+and going again is the entire loop.
+
+There is no Midjourney here, and that is not an oversight: it publishes no
+API. Anything else that does can be reached through Replicate or fal without
+waiting for a release of this.
+
+**The desktop itself, without taking your mouse.** `OPENMIRROR_DESKTOP=true` adds
 screenshots, clicks, typing, scrolling and key chords. The part that matters
 is *where*: on a **virtual stage** the agent gets an X server of its own — its
 own pointer, its own keyboard, its own windows — and applications are launched
@@ -232,7 +255,7 @@ call itself harmless is a server that can opt out of the check it most needs.
 **Rewind.** Every turn that changes a file can be undone, including one that
 was interrupted halfway. See [docs/EXTENDING.md](docs/EXTENDING.md).
 
-**Full system access, if you want it.** `ROOST_UNCONFINED=true` gives it the
+**Full system access, if you want it.** `OPENMIRROR_UNCONFINED=true` gives it the
 whole filesystem and tells the model plainly that it is not sandboxed.
 Purchases and credentials stay on their own axis — see
 [docs/AUTONOMY.md](docs/AUTONOMY.md), which is the page to read before running
@@ -259,7 +282,7 @@ floor model everything is a way of putting it below the floor without changing
 the model.
 
 Honest about the evidence: those measurements are `gemma4:12b`. `qwen3.5:9b` is
-named because the rest of this family tests against it, not because Roost has
+named because the rest of this family tests against it, not because openmirror has
 measured it. And even narrowed, a 12B is not enough for `autopilot` — see
 "What is not built yet".
 
@@ -269,7 +292,7 @@ The floor governs what a **feature** may assume, not what an **operator** may ru
 
 ### The ceiling: frontier models with thinking
 
-The end Roost was actually designed around — planning, calling tools and
+The end openmirror was actually designed around — planning, calling tools and
 recovering from its own mistakes is what reasoning models are best at.
 Reasoning streams as its own channel and renders as working-out under the
 reply; nothing is gated on model size; no prompt is shortened for the floor.
@@ -278,12 +301,12 @@ sent off deliberately.
 
 ### Where it runs: not a thin client
 
-Roost installs like `claude-code` or `codex` — a daemon on the machine you want
+openmirror installs like `claude-code` or `codex` — a daemon on the machine you want
 worked on, reached from a browser. **The model may be remote. The agent is
 not.** It runs shell with a risk classifier, edits files, drives a real
 Chromium, and optionally sees the screen and moves the mouse — all on the host
-it is installed on, whichever machine the tokens come from. `ROOST_WORKSPACE`,
-the approval modes and `ROOST_UNCONFINED` are all about *that* box.
+it is installed on, whichever machine the tokens come from. `OPENMIRROR_WORKSPACE`,
+the approval modes and `OPENMIRROR_UNCONFINED` are all about *that* box.
 
 Worth being blunt about, because "points at a remote AI box" invites the
 reading that the local install is just a UI. It is not, and somewhere you would
@@ -291,10 +314,10 @@ not put an agent is not somewhere to put this.
 
 Two shapes follow:
 
-**Models elsewhere.** A strong machine running Roost, models on a separate AI
+**Models elsewhere.** A strong machine running openmirror, models on a separate AI
 box (Perch, an Ollama on the LAN) or a provider API. Best answers, and the
 local box spends nothing on inference. This is the common case and it is what
-`ROOST_LOCAL_ONLY` exists to *constrain* — set it and a hosted provider is an
+`OPENMIRROR_LOCAL_ONLY` exists to *constrain* — set it and a hosted provider is an
 error at route resolution, never a quiet fallback.
 
 **Everything on one box, 16 GB+.** One machine, local models only, nothing
@@ -373,7 +396,7 @@ the same position, and it is the one with the least margin for error, since
 its event names moved between the beta and GA and only one of the two
 spellings can be checked without a key.
 
-**There are no accounts, and there are not going to be.** Roost is a client —
+**There are no accounts, and there are not going to be.** openmirror is a client —
 you install it on a machine you control, the way you install `claude-code` or
 `codex`, and the person at the keyboard is the person it works for. Everything
 belongs to one user id because there is one user.
@@ -381,7 +404,7 @@ belongs to one user id because there is one user.
 That is not a smaller ambition, it is a different axis. Scale here is never
 "more users"; it is **one person, for years**, with a memory that is meant to
 hold basically everything about them. The store therefore grows without a
-natural ceiling, and the brute-force scan in `roost/memory/store.py` has a
+natural ceiling, and the brute-force scan in `openmirror/memory/store.py` has a
 measured limit that the intended product walks through rather than approaches:
 comfortable at a few thousand memories, 53 ms at ten thousand, 283 ms at fifty.
 Two fixes are identified and neither is built — a keyed projection to a narrow
@@ -418,7 +441,7 @@ Linux, macOS and Windows. Python 3.11+.
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 cp .env.example .env      # then edit it — it is read at start-up
-.venv/bin/roost
+.venv/bin/openmirror
 ```
 
 The optional extras, none of which an install needs to be complete:
@@ -446,7 +469,7 @@ curl -s localhost:8477/healthz
 ```
 
 Bound to loopback with no token by default, which is deliberate: this process
-runs commands on your machine. Set `ROOST_TOKEN` before moving it.
+runs commands on your machine. Set `OPENMIRROR_TOKEN` before moving it.
 
 ## Approval modes
 
@@ -475,7 +498,7 @@ including an autopilot run nobody is watching**. There is no setting that
 skips that prompt — deliberately, because a setting like that is one somebody
 turns on during a demo and still has on six months later. Neither is ever
 remembered either: "don't ask again" about spending money is the one answer
-nobody should be able to give once. `ROOST_ALLOW_PURCHASES=false` turns a
+nobody should be able to give once. `OPENMIRROR_ALLOW_PURCHASES=false` turns a
 purchase into a refusal rather than a prompt, for an install that should not
 be able to buy anything at all.
 
@@ -490,10 +513,10 @@ keyboard: a value the agent never receives cannot leak from anywhere.
 ## With Perch
 
 ```bash
-PERCH_HOST=127.0.0.1 PERCH_TOKEN=... .venv/bin/roost
+PERCH_HOST=127.0.0.1 PERCH_TOKEN=... .venv/bin/openmirror
 ```
 
-Perch's services already speak shapes Roost has adapters for — Ollama and
+Perch's services already speak shapes openmirror has adapters for — Ollama and
 OpenAI for chat, OpenAI for dictation and speech, A1111 for images, ComfyUI
 for video — so there is nothing to translate. Services that are switched off
 are left unregistered rather than registered and allowed to fail later.
@@ -504,11 +527,11 @@ Two directions, and they are independent:
 
 **Open WebUI as a provider.** Set `OPENWEBUI_BASE_URL`. It serves OpenAI's
 shapes at `/api/v1`, so every connection configured over there becomes
-reachable through one Roost entry — including providers Roost has no adapter
+reachable through one openmirror entry — including providers openmirror has no adapter
 for.
 
-**Roost as Open WebUI's terminal server.** Open WebUI's `terminals.py` is a
-reverse proxy to an external terminal server; Roost's agent websocket is
+**openmirror as Open WebUI's terminal server.** Open WebUI's `terminals.py` is a
+reverse proxy to an external terminal server; openmirror's agent websocket is
 meant to be that server.
 
 ## Testing
@@ -556,6 +579,6 @@ Apache 2.0. See `NOTICE` for what is derived from Open WebUI and the
 conditions that carries — in short, its copyright notice is retained and its
 branding is not removed from anything that embeds it.
 
-Roost contains **no code from Anthropic's Claude Code.** The agent runtime is
+openmirror contains **no code from Anthropic's Claude Code.** The agent runtime is
 an independent implementation, and Anthropic API compatibility is written
 against Anthropic's published documentation.

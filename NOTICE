@@ -1,24 +1,24 @@
-Roost
-Copyright (c) 2026 Roost contributors
+openmirror
+Copyright (c) 2026 openmirror contributors
 
 This product includes software developed by Open WebUI Inc.
 (https://github.com/open-webui/open-webui), created by Timothy Jaeryang Baek,
 Copyright (c) 2023- Open WebUI Inc. All rights reserved.
 
-Portions of Roost are derived from Open WebUI and remain subject to the
+Portions of openmirror are derived from Open WebUI and remain subject to the
 Open WebUI License, reproduced in LICENSE-OpenWebUI. In particular:
 
-  * Roost retains the Open WebUI copyright notice and conditions as required
+  * openmirror retains the Open WebUI copyright notice and conditions as required
     by clauses 1 and 2 of that license.
-  * Roost does not alter, remove, obscure or replace Open WebUI branding in
+  * openmirror does not alter, remove, obscure or replace Open WebUI branding in
     any deployment or distribution that includes Open WebUI components, as
-    required by clause 4. Roost is a distinct application that interoperates
+    required by clause 4. openmirror is a distinct application that interoperates
     with Open WebUI; where an Open WebUI component is embedded or served, its
     branding is preserved.
 
 Files derived from Open WebUI carry a header naming the upstream file they
-came from. Files without such a header are original to Roost.
+came from. Files without such a header are original to openmirror.
 
-Roost contains no code from Anthropic's Claude Code. Its agent runtime is an
+openmirror contains no code from Anthropic's Claude Code. Its agent runtime is an
 independent implementation. Compatibility with the Anthropic Messages API is
 implemented against Anthropic's published API documentation.

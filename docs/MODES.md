@@ -32,7 +32,7 @@ the same as consenting to have commands run — and the voice gateway enforces
 that separately, so the box only decides whether an agent session is attached
 at all.
 
-Barge-in works the way it does everywhere else in Roost: talk over it and the
+Barge-in works the way it does everywhere else in openmirror: talk over it and the
 synthesis is killed server-side, the client drops what it has buffered, and
 the history records only what you actually heard.
 
@@ -125,7 +125,7 @@ reproduce is a picture you cannot iterate on.
 
 None ship, because a template names the checkpoints and custom nodes your
 ComfyUI has. Bringing yours is one command — see
-[roost/providers/workflows/README.md](../roost/providers/workflows/README.md).
+[openmirror/providers/workflows/README.md](../openmirror/providers/workflows/README.md).
 The prompt, seed, size and sampler settings are found and turned into
 controls, and what it found is reported back so you can see whether it worked.
 

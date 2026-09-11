@@ -1,4 +1,4 @@
-"""What Roost asks the Messages API for, and the three ways that shape moved.
+"""What openmirror asks the Messages API for, and the three ways that shape moved.
 
 None of these rules is visible in a response body, which is why they are tested
 directly rather than left to a live call to exercise:
@@ -17,8 +17,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from roost.providers.anthropic import _TRANSLATED_EXTRAS, reasoning_params
-from roost.providers.base import ChatRequest
+from openmirror.providers.anthropic import _TRANSLATED_EXTRAS, reasoning_params
+from openmirror.providers.base import ChatRequest
 
 CURRENT = 'claude-opus-5'
 OLD = 'claude-3-5-sonnet-20241022'
@@ -110,7 +110,7 @@ def test_the_adapter_never_writes_a_disabled_thinking_type():
     # behaviour: `{'type': 'disabled'}` is the obvious way to honour a
     # think: False, and it is the one that breaks tool calling silently. If it
     # ever has to change, it should have to change here too.
-    src = Path(__file__).resolve().parents[1] / 'roost' / 'providers' / 'anthropic.py'
+    src = Path(__file__).resolve().parents[1] / 'openmirror' / 'providers' / 'anthropic.py'
     assert len(src.read_text(encoding='utf-8')) > 500, 'the adapter source was not read properly'
     literals = _code_strings(src)
 

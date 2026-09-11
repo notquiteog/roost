@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Roost",
+  "productName": "openmirror",
   "version": "0.1.0",
-  "identifier": "dev.roost.desktop",
+  "identifier": "dev.openmirror.desktop",
   "build": {
     "frontendDist": "../ui"
   },
@@ -32,7 +32,7 @@
       "icons/icon.png"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "An agent harness for every common AI endpoint",
-    "longDescription": "Roost runs an autonomous agent on your machine: shell and file access, a real browser, desktop control, live voice, and a choice of model provider for every kind of generation."
+    "shortDescription": "An open-source digital twin",
+    "longDescription": "openmirror is an open-source digital twin: it runs on your machine with shell and file access, a real browser, desktop control, live voice, opt-in memory, and a choice of model provider for every kind of generation."
   }
 }

@@ -1,12 +1,12 @@
 # Running it autonomously
 
-Roost will do whatever you configure it to do. This page is about what the
+openmirror will do whatever you configure it to do. This page is about what the
 switches actually mean, because two of them are not the same decision even
 though they look adjacent.
 
 ## The two axes
 
-**`ROOST_APPROVAL_MODE`** is about *this machine*.
+**`OPENMIRROR_APPROVAL_MODE`** is about *this machine*.
 
 | mode | runs without asking |
 |---|---|
@@ -16,7 +16,7 @@ though they look adjacent.
 | `trusted` | reads, writes, commands, network |
 | `unrestricted` | everything above, including destructive |
 
-**`ROOST_ALLOW_PURCHASES`** and **`ROOST_ALLOW_CREDENTIALS`** are not on that
+**`OPENMIRROR_ALLOW_PURCHASES`** and **`OPENMIRROR_ALLOW_CREDENTIALS`** are not on that
 scale, and deliberately so. `unrestricted` means *stop asking me about this
 machine*. It is not the sentence *spend my money*, and if one switch bought
 both, everybody who wanted the first would get the second by accident.
@@ -26,21 +26,21 @@ full knowledge of what you are turning on.
 
 ## Confinement
 
-`ROOST_UNCONFINED=false` (the default) confines the **file tools** to the
+`OPENMIRROR_UNCONFINED=false` (the default) confines the **file tools** to the
 workspace: `read_file` and `edit_file` refuse a path outside it, and refuse
 `..` and symlinks out, because they resolve before they compare.
 
 **The shell cannot be confined.** What a command touches is decided at
-runtime; no string inspection changes that. What Roost does instead is refuse
+runtime; no string inspection changes that. What openmirror does instead is refuse
 to *grade* it as harmless: a command naming a path outside the root is
 escalated from `read` to `execute`, so under the default policy it stops and
 asks rather than running silently. That is honesty about the boundary, not
 enforcement of it.
 
 If you need actual containment, it has to come from the OS — a container, a
-namespace, a seccomp profile. Roost does not pretend to provide it.
+namespace, a seccomp profile. openmirror does not pretend to provide it.
 
-`ROOST_UNCONFINED=true` drops the file-tool checks too and tells the model
+`OPENMIRROR_UNCONFINED=true` drops the file-tool checks too and tells the model
 plainly that it is not sandboxed, which is worth doing: a model that believes
 it is in a sandbox is careless in ways one that knows it isn't will not be.
 
@@ -83,7 +83,7 @@ on with everything else.
 ## The thing that has no defence
 
 **Prompt injection.** Anything read from the web is written by someone who is
-not you, and it can be as fluent as you are. Roost labels fetched content as
+not you, and it can be as fluent as you are. openmirror labels fetched content as
 data from a named source and tells the model it is not addressed to it. That
 is a mitigation, not a fix; there is no reliable fix.
 
@@ -95,7 +95,7 @@ it, and it is the one configuration worth thinking twice about.
 
 ## Desktop control is the weak spot
 
-Turning on `ROOST_DESKTOP` gives the agent the screen and the mouse. It is the
+Turning on `OPENMIRROR_DESKTOP` gives the agent the screen and the mouse. It is the
 widest capability here and it has the thinnest safety net, for a reason worth
 understanding before you use it unattended.
 

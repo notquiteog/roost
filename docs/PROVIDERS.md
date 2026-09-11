@@ -29,8 +29,8 @@ offers "your AI provider" as one choice is a UI that will eventually ship
 someone's memory to a company they picked to write code with.
 
 ```bash
-ROOST_CHAT_PROVIDER=anthropic
-ROOST_EMBED_PROVIDER=perch:chat     # embeddings stay on your own hardware
+OPENMIRROR_CHAT_PROVIDER=anthropic
+OPENMIRROR_EMBED_PROVIDER=perch:chat     # embeddings stay on your own hardware
 ```
 
 ## What you can connect
@@ -44,6 +44,8 @@ whatever was true when this file was written is worse than no preset at all.
 | **Hosted chat** | OpenAI, Anthropic, Groq, OpenRouter, Fireworks, Together, NanoGPT, DeepInfra, Cerebras, Mistral, xAI |
 | **Hosted embedding** | OpenAI, Voyage, Google, and the gateways above |
 | **Your hardware** | Ollama (local or remote), LM Studio, vLLM, llama.cpp, AUTOMATIC1111, ComfyUI |
+| **Images** | AUTOMATIC1111, ComfyUI, Replicate, fal, OpenAI, Google (Imagen and the conversational image model), Black Forest Labs, Stability, Ideogram, Recraft, Runway, Luma, Kling, MiniMax, xAI, Together, Fireworks, DeepInfra |
+| **Video** | ComfyUI, Replicate, fal, OpenAI (Sora), Google (Veo), Runway, Luma, Kling, MiniMax, Stability |
 | **Both** | Open WebUI, which is itself a gateway to everything configured over there |
 | **All five at once** | Perch — one host, one token |
 
@@ -54,7 +56,7 @@ together, because the shape won.
 ### "This runs on hardware I control"
 
 A tick box, and it is asked rather than guessed because a remote Ollama looks
-exactly like a local one from here. It decides whether `ROOST_LOCAL_ONLY` will
+exactly like a local one from here. It decides whether `OPENMIRROR_LOCAL_ONLY` will
 accept the connection — and `local_only` is enforced when a route resolves,
 not in the UI, so a local backend being down is an error rather than a quiet
 fallback to a hosted one.
@@ -72,7 +74,7 @@ fallback to a hosted one.
 **Dimensions cannot change under an existing store.** Vectors of different
 lengths are not comparable, so the store records what each was made with and
 refuses to compare across them — which means a changed model or a changed
-`ROOST_EMBED_DIMENSIONS` makes old memories unsearchable rather than wrong.
+`OPENMIRROR_EMBED_DIMENSIONS` makes old memories unsearchable rather than wrong.
 That is the right failure, and it is worth knowing before you change either.
 
 It is worth knowing *twice* if you are moving up to the floor from something
@@ -87,7 +89,7 @@ moment for anyone to hit it.
 Several of these are trained so that a passage being stored and a question
 being asked are embedded *differently*, and using one setting for both costs
 recall in a way that reads as the model simply being worse than advertised.
-Roost handles it per model, because the mechanism differs:
+openmirror handles it per model, because the mechanism differs:
 
 * Voyage takes an `input_type` of `query` or `document`.
 * `gemini-embedding-001` takes a `taskType`.
@@ -186,7 +188,7 @@ passing until the day it was meant to catch something.
 
 **Chat: `qwen3.5:9b` or `gemma4:12b`. Embedding: `Qwen3-Embedding-4B`.**
 
-That is the minimum Roost's features are built and tested against — not the
+That is the minimum openmirror's features are built and tested against — not the
 smallest thing that runs. Below it the agent loop does not get slower, it gets
 unreliable in ways that read as the harness being broken: a model that cannot
 hold a tool schema answers in prose where a tool call was needed, and a model
@@ -210,7 +212,7 @@ Two honesty notes on the evidence:
 
 * The measurements above are `gemma4:12b`. **There is no `qwen3.5:9b` data
   here** — it is named as the floor because the other projects in this family
-  test against it, not because Roost has measured it.
+  test against it, not because openmirror has measured it.
 * Even narrowed, `gemma4:12b` is not enough for `autopilot`. Unattended it
   wandered off task; the harness held — the loop guard stopped it, Stop
   stopped it — but "fully autonomous" is a claim about the model as much as
@@ -225,7 +227,7 @@ run.
 ### The ceiling: frontier models with thinking
 
 The other end is a first-class target rather than a happy accident, and it is
-the end Roost was designed around: an agent loop that plans, calls tools and
+the end openmirror was designed around: an agent loop that plans, calls tools and
 recovers from its own mistakes is exactly the workload reasoning models are
 best at.
 

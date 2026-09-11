@@ -4,7 +4,7 @@
 
 Open WebUI's licence permits modification and redistribution, but forbids
 removing its branding in any deployment above fifty users. A rebranded fork
-therefore breaks at exactly the point it succeeds. Roost is a distinct
+therefore breaks at exactly the point it succeeds. openmirror is a distinct
 application that interoperates with Open WebUI instead, and reuses its code
 where useful under the terms in `NOTICE`.
 
@@ -18,7 +18,7 @@ building anything, the following turned out to exist in 0.11.3:
 * image generation against A1111, ComfyUI, OpenAI and Gemini;
 * speech in and out against five providers each.
 
-So Roost does not reimplement those. It builds the parts that were missing:
+So openmirror does not reimplement those. It builds the parts that were missing:
 an agent runtime, duplex voice, and one place where the provider for each
 modality is chosen and enforced.
 
@@ -113,7 +113,7 @@ applied, and the one that got it wrong would be the one nobody was watching.
 Perch's five services each deliberately speak a shape something else already
 speaks, so none needs an adapter:
 
-| service | port | shape | Roost adapter |
+| service | port | shape | openmirror adapter |
 |---|---|---|---|
 | chat | 11434 | Ollama + OpenAI | `ollama.py` |
 | dictation | 8080 | OpenAI transcriptions | `openai_compat.py` |

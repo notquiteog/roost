@@ -12,9 +12,9 @@ import json
 
 import pytest
 
-from roost.media import workflow as wf
-from roost.media.params import Param, coerce, common_image, defaults, unknown_keys
-from roost.media.store import MediaStore
+from openmirror.media import workflow as wf
+from openmirror.media.params import Param, coerce, common_image, defaults, unknown_keys
+from openmirror.media.store import MediaStore
 
 # -- parameters -------------------------------------------------------------
 
@@ -180,3 +180,242 @@ def test_an_id_is_never_joined_onto_a_path(tmp_path, bad):
     store = MediaStore(tmp_path)
     assert store.path(bad) is None
     assert store.get(bad) is None
+
+
+def test_a_reference_image_does_not_bury_the_gallery(tmp_path):
+    """The store holds uploads too, because an image-to-video reference has to
+    live somewhere this server can read later. What it must not do is put every
+    picture you dropped in alongside every picture that was made."""
+    store = MediaStore(tmp_path)
+    store.add(b'made', kind='image', media_type='image/png', prompt='a result')
+    store.add(b'given', kind='image', media_type='image/png', source='upload')
+
+    assert [m.prompt for m in store.list()] == ['a result']
+    assert len(store.list(source='')) == 2
+    assert len(store.list(source='upload')) == 1
+
+
+def test_the_library_can_be_paged_and_searched(tmp_path):
+    store = MediaStore(tmp_path)
+    for index in range(5):
+        store.add(b'x', kind='image', media_type='image/png',
+                  prompt=f'a cat number {index}', model='sdxl')
+    store.add(b'x', kind='video', media_type='video/mp4', prompt='a dog running', model='wan')
+
+    assert len(store.list(limit=2)) == 2
+    assert len(store.list(limit=2, offset=4)) == 2
+    assert len(store.list(limit=10, offset=10)) == 0
+    assert {m.prompt for m in store.list(search='dog')} == {'a dog running'}
+    # The search covers what a person would actually remember about a result.
+    assert len(store.list(search='sdxl')) == 5
+    assert len(store.list(kind='video')) == 1
+
+
+# -- the service ------------------------------------------------------------
+
+
+class _Recorder:
+    """A provider that records what it was told and returns one small PNG."""
+
+    provider_id = 'recorder'
+
+    def __init__(self, *, stall: bool = False) -> None:
+        self.seen: dict = {}
+        self.stall = stall
+        self.interrupted = False
+        self.notes: list = []
+
+    async def models(self, kind: str = ''):
+        return [{'id': f'{kind}-model'}]
+
+    async def describe(self, model: str = ''):
+        return [
+            Param('prompt', 'Prompt', 'text'),
+            Param('image', 'Starting image', 'image'),
+            Param('steps', 'Steps', 'int', default=20, minimum=1, maximum=50),
+        ]
+
+    async def generate(self, prompt, *, model='', n=1, size='', progress=None, **kw):
+        from openmirror.providers.base import GeneratedMedia
+
+        self.seen = {'prompt': prompt, 'model': model, 'n': n, 'size': size, **kw}
+        if progress:
+            progress(None, 'queued somewhere')
+            progress(0.5, 'halfway')
+        if self.stall:
+            import asyncio
+
+            await asyncio.sleep(30)
+        return [GeneratedMedia(data=b'\x89PNG fake', media_type='image/png', seed=99)]
+
+    async def interrupt(self):
+        self.interrupted = True
+
+
+def _service(tmp_path, impl, modality=None):
+    from openmirror.media.service import MediaService
+    from openmirror.providers.base import Modality, ProviderInfo
+    from openmirror.providers.registry import ProviderRegistry
+
+    modality = modality or Modality.IMAGE
+    registry = ProviderRegistry()
+    registry.register(
+        ProviderInfo(id='recorder', label='Recorder', modalities={modality}, local=True),
+        {modality: impl},
+    )
+    return MediaService(MediaStore(tmp_path), registry)
+
+
+async def test_a_reference_image_reaches_the_provider_as_bytes(tmp_path):
+    """A control of kind `image` carries a media id through the JSON, and the
+    provider gets the picture. Ids rather than paths or data URIs is the point:
+    the only thing a client can name is something this server already stored."""
+    impl = _Recorder()
+    service = _service(tmp_path, impl)
+    reference = service.store.add(b'\x89PNG reference', kind='image', media_type='image/png',
+                                  source='upload')
+
+    job = service.start('image', 'a cat', params={'image': reference.id, 'steps': 30})
+    await job.task
+
+    assert job.state == 'done'
+    assert impl.seen['image'] == b'\x89PNG reference'
+    assert impl.seen['steps'] == 30
+
+
+async def test_an_id_for_something_that_is_not_there_is_dropped_rather_than_sent(tmp_path):
+    impl = _Recorder()
+    service = _service(tmp_path, impl)
+    job = service.start('image', 'a cat', params={'image': 'deadbeefdeadbeef'})
+    await job.task
+    assert job.state == 'done'
+    assert 'image' not in impl.seen
+
+
+async def test_the_recipe_records_the_settings_and_not_the_picture(tmp_path):
+    """A reference image is megabytes and belongs in the store, not repeated
+    inside the sidecar of everything it was used to make."""
+    impl = _Recorder()
+    service = _service(tmp_path, impl)
+    reference = service.store.add(b'\x89PNG reference', kind='image', media_type='image/png',
+                                  source='upload')
+    job = service.start('image', 'a cat', params={'image': reference.id, 'steps': 30})
+    await job.task
+
+    stored = service.store.get(job.media[0].id)
+    assert stored.params['steps'] == 30
+    assert 'image' not in stored.params
+    # And the seed the backend actually used, which is the whole point of
+    # storing any of it.
+    assert stored.seed == 99
+
+
+async def test_a_job_carries_what_the_backend_honestly_said(tmp_path):
+    impl = _Recorder()
+    service = _service(tmp_path, impl)
+    job = service.start('image', 'a cat')
+    await job.task
+    assert job.state == 'done'
+    assert job.progress == 1.0
+    assert job.elapsed >= 0
+
+
+async def test_stopping_a_job_tells_the_backend_too(tmp_path):
+    """A job abandoned rather than cancelled keeps a GPU busy and keeps a
+    hosted account billing."""
+    import asyncio
+
+    impl = _Recorder(stall=True)
+    service = _service(tmp_path, impl)
+    job = service.start('image', 'a cat')
+    await asyncio.sleep(0.05)
+
+    assert service.cancel(job.id) is True
+    with pytest.raises(asyncio.CancelledError):
+        await job.task
+    assert job.state == 'cancelled'
+    assert impl.interrupted is True
+
+
+async def test_a_failed_job_is_a_state_rather_than_a_crash(tmp_path):
+    class Broken(_Recorder):
+        async def generate(self, prompt, **kw):
+            raise RuntimeError('CUDA out of memory')
+
+    service = _service(tmp_path, Broken())
+    job = service.start('image', 'a cat')
+    await job.task
+    assert job.state == 'failed'
+    # The backend's own words: "out of memory" and "no such checkpoint" want
+    # different reactions from the person reading it.
+    assert 'CUDA out of memory' in job.error
+
+
+async def test_the_video_picker_is_not_offered_the_image_models(tmp_path):
+    """The aggregators host both and their lists barely overlap, so `kind` is
+    passed to any provider whose listing takes it."""
+    from openmirror.providers.base import Modality
+
+    impl = _Recorder()
+    service = _service(tmp_path, impl, modality=Modality.VIDEO)
+    described = await service.describe('video')
+    assert described['models'] == [{'id': 'video-model'}]
+
+
+async def test_finished_jobs_do_not_accumulate_forever(tmp_path):
+    from openmirror.media import service as service_mod
+
+    impl = _Recorder()
+    service = _service(tmp_path, impl)
+    original = service_mod.KEEP_JOBS
+    service_mod.KEEP_JOBS = 3
+    try:
+        for _ in range(6):
+            job = service.start('image', 'a cat')
+            await job.task
+        assert len(service.jobs) <= 4
+    finally:
+        service_mod.KEEP_JOBS = original
+
+
+async def test_a_recipe_records_only_what_could_reproduce_the_result(tmp_path):
+    """Found by running it: a model that sizes by aspect ratio was recording
+    `size 1024x1024`, which it neither asked for nor has a control for, and
+    `seed -1`, which is a request for a random seed rather than a seed. Both
+    read as settings to somebody trying to get the same picture again."""
+    class Ratio(_Recorder):
+        async def describe(self, model: str = ''):
+            return [
+                Param('prompt', 'Prompt', 'text'),
+                Param('aspect_ratio', 'Aspect ratio', 'enum', default='16:9', options=['16:9', '1:1']),
+                Param('seed', 'Seed', 'seed', default=-1),
+                Param('n', 'How many', 'int', default=1, minimum=1, maximum=4),
+            ]
+
+    service = _service(tmp_path, Ratio())
+    job = service.start('image', 'a lighthouse', params={'aspect_ratio': '16:9', 'seed': -1, 'n': 1})
+    await job.task
+
+    recipe = service.store.get(job.media[0].id).params
+    assert recipe == {'aspect_ratio': '16:9'}
+    assert 'size' not in recipe
+    assert 'seed' not in recipe
+
+
+async def test_a_backend_that_does_size_by_pixels_still_records_it(tmp_path):
+    class Pixels(_Recorder):
+        async def describe(self, model: str = ''):
+            return [
+                Param('prompt', 'Prompt', 'text'),
+                Param('width', 'Width', 'int', default=1024, minimum=64, maximum=2048),
+                Param('height', 'Height', 'int', default=1024, minimum=64, maximum=2048),
+                Param('n', 'How many', 'int', default=1, minimum=1, maximum=4),
+            ]
+
+    service = _service(tmp_path, Pixels())
+    job = service.start('image', 'a lighthouse', params={'width': 1344, 'height': 768, 'n': 2})
+    await job.task
+
+    recipe = service.store.get(job.media[0].id).params
+    assert recipe['size'] == '1344x768'
+    assert recipe['n'] == 2

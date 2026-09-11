@@ -29,13 +29,13 @@ from pathlib import Path
 
 import pytest
 
-from roost.providers.base import ChatRequest
+from openmirror.providers.base import ChatRequest
 
 
 def repo_root() -> Path:
     here = Path(__file__).resolve()
     for parent in here.parents:
-        if (parent / 'roost' / 'providers' / 'base.py').exists():
+        if (parent / 'openmirror' / 'providers' / 'base.py').exists():
             return parent
     raise AssertionError(f'cannot find the source tree, starting from {here}')
 
@@ -146,9 +146,9 @@ def test_the_scanner_tells_a_guarded_write_from_a_bare_one():
 
 
 @pytest.mark.parametrize('rel', [
-    'roost/providers/ollama.py',
-    'roost/providers/openai_compat.py',
-    'roost/providers/anthropic.py',
+    'openmirror/providers/ollama.py',
+    'openmirror/providers/openai_compat.py',
+    'openmirror/providers/anthropic.py',
 ])
 def test_no_adapter_sends_a_ceiling_unconditionally(rel):
     found = unguarded_ceiling_writes(source(rel))
@@ -165,9 +165,9 @@ def test_the_scan_is_looking_at_files_that_really_contain_these_writes():
     # second: the wrong directory, and a pattern that has stopped matching a
     # rewritten file. The parametrised test above passes in both cases.
     hits = sum(len(WRITES_CEILING.findall(source(rel))) for rel in (
-        'roost/providers/ollama.py',
-        'roost/providers/openai_compat.py',
-        'roost/providers/anthropic.py',
+        'openmirror/providers/ollama.py',
+        'openmirror/providers/openai_compat.py',
+        'openmirror/providers/anthropic.py',
     ))
     assert hits >= 3, f'expected each adapter to write a ceiling somewhere; found {hits}'
 
@@ -177,7 +177,7 @@ def test_anthropic_asks_the_api_rather_than_guessing():
     # to come from the model, because one ABOVE the real ceiling is a 400 —
     # a broken adapter rather than a short answer — and ceilings differ per
     # model and move each generation.
-    text = source('roost/providers/anthropic.py')
+    text = source('openmirror/providers/anthropic.py')
     assert '_output_limit' in text
     assert '/models/' in text, 'the ceiling is not read from the Models API'
     # And the fallback must err downwards, for the same reason.
@@ -189,7 +189,7 @@ def test_anthropic_asks_the_api_rather_than_guessing():
 def test_the_voice_path_does_not_reimpose_one():
     # A spoken reply that stops mid-sentence has no scrollback and no visible
     # stop reason — just a voice trailing off. It carried max_tokens=1024.
-    text = source('roost/voice/pipeline.py')
+    text = source('openmirror/voice/pipeline.py')
     assert not re.search(r'max_tokens\s*=\s*\d+', text), (
         'the voice pipeline sets a fixed token ceiling again'
     )
