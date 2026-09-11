@@ -298,6 +298,17 @@ class Config:
     # Ask a truncatable embedding model for shorter vectors. Cannot be changed
     # under an existing store — vectors of different lengths are not comparable.
     embed_dimensions: int = field(default_factory=lambda: _int('OPENMIRROR_EMBED_DIMENSIONS', 0))
+    # The other four, pinned the same way when they are named. Blank is still
+    # "first that can", which prefers local hardware — so an install with Perch
+    # on the machine and a hosted connection for the rest has to say which one
+    # speaks, or it is whichever is local. The model on each route is the
+    # matching default below: STT_MODEL, TTS_MODEL and TTS_VOICE, and these.
+    stt_provider: str = field(default_factory=lambda: os.getenv('OPENMIRROR_STT_PROVIDER', ''))
+    tts_provider: str = field(default_factory=lambda: os.getenv('OPENMIRROR_TTS_PROVIDER', ''))
+    image_provider: str = field(default_factory=lambda: os.getenv('OPENMIRROR_IMAGE_PROVIDER', ''))
+    image_model: str = field(default_factory=lambda: os.getenv('OPENMIRROR_IMAGE_MODEL', ''))
+    video_provider: str = field(default_factory=lambda: os.getenv('OPENMIRROR_VIDEO_PROVIDER', ''))
+    video_model: str = field(default_factory=lambda: os.getenv('OPENMIRROR_VIDEO_MODEL', ''))
 
     default_chat_model: str = field(default_factory=lambda: os.getenv('OPENMIRROR_CHAT_MODEL', ''))
     default_stt_model: str = field(default_factory=lambda: os.getenv('OPENMIRROR_STT_MODEL', 'whisper-1'))

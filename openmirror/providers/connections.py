@@ -233,6 +233,18 @@ def build(conn: Connection) -> tuple[ProviderInfo, dict[Modality, Any]]:
             Modality.IMAGE: one(cls, kind='image', timeout=long_running),
             Modality.VIDEO: one(cls, kind='video', timeout=long_running),
         }
+    elif conn.adapter == 'openrouter':
+        from openmirror.providers.openrouter import OpenRouterImages, OpenRouterProvider, OpenRouterVideo
+
+        # An instance per modality even for the four OpenAI-shaped ones,
+        # because each lists its models at a different address — one list for
+        # all four is four hundred chat models in the dictation picker.
+        impls = {
+            modality: one(OpenRouterProvider, kind=modality)
+            for modality in (Modality.CHAT, Modality.EMBEDDING, Modality.STT, Modality.TTS)
+        }
+        impls[Modality.IMAGE] = one(OpenRouterImages)
+        impls[Modality.VIDEO] = one(OpenRouterVideo, timeout=long_running)
     elif conn.adapter == 'bfl':
         from openmirror.providers.bfl import BFLProvider
 

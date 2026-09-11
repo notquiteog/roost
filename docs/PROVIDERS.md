@@ -33,6 +33,14 @@ OPENMIRROR_CHAT_PROVIDER=anthropic
 OPENMIRROR_EMBED_PROVIDER=perch:chat     # embeddings stay on your own hardware
 ```
 
+The other four are pinned the same way, and only when they are named:
+`OPENMIRROR_STT_PROVIDER`, `OPENMIRROR_TTS_PROVIDER`, `OPENMIRROR_IMAGE_PROVIDER`
+and `OPENMIRROR_VIDEO_PROVIDER`, each taking its model from `OPENMIRROR_STT_MODEL`,
+`OPENMIRROR_TTS_MODEL` (and `OPENMIRROR_TTS_VOICE`), `OPENMIRROR_IMAGE_MODEL` and
+`OPENMIRROR_VIDEO_MODEL`. An unnamed modality goes to the first provider that can
+serve it, local hardware first — so a machine running Perch with a hosted
+gateway for everything else has to say which one speaks.
+
 ## What you can connect
 
 Twenty presets ship, and each is a starting point rather than a constraint —
@@ -44,10 +52,21 @@ whatever was true when this file was written is worse than no preset at all.
 | **Hosted chat** | OpenAI, Anthropic, Groq, OpenRouter, Fireworks, Together, NanoGPT, DeepInfra, Cerebras, Mistral, xAI |
 | **Hosted embedding** | OpenAI, Voyage, Google, and the gateways above |
 | **Your hardware** | Ollama (local or remote), LM Studio, vLLM, llama.cpp, AUTOMATIC1111, ComfyUI |
-| **Images** | AUTOMATIC1111, ComfyUI, Replicate, fal, OpenAI, Google (Imagen and the conversational image model), Black Forest Labs, Stability, Ideogram, Recraft, Runway, Luma, Kling, MiniMax, xAI, Together, Fireworks, DeepInfra |
-| **Video** | ComfyUI, Replicate, fal, OpenAI (Sora), Google (Veo), Runway, Luma, Kling, MiniMax, Stability |
+| **Images** | AUTOMATIC1111, ComfyUI, Replicate, fal, OpenAI, Google (Imagen and the conversational image model), Black Forest Labs, Stability, Ideogram, Recraft, Runway, Luma, Kling, MiniMax, xAI, Together, Fireworks, DeepInfra, OpenRouter |
+| **Video** | ComfyUI, Replicate, fal, OpenAI (Sora), Google (Veo), Runway, Luma, Kling, MiniMax, Stability, OpenRouter |
 | **Both** | Open WebUI, which is itself a gateway to everything configured over there |
 | **All five at once** | Perch — one host, one token |
+| **All six on one key** | OpenRouter — chat, embeddings, dictation, speech, images and video |
+
+**OpenRouter** is OpenAI's shapes for chat, embeddings and speech both ways,
+and its own APIs for images and video; each modality lists its models at its
+own address, so each picker shows only what can do that job. Two things were
+found against the live API rather than in its documentation. Its model list
+answers a wrong key with the full catalogue, so **Test** asks `/key`, which
+does refuse. And speech comes back at the rate the voice was made at — 24 kHz
+from Kokoro, 44.1 kHz from Fish Audio — which openmirror resamples rather than
+playing nearly twice as slow.
+
 
 Anything else that speaks OpenAI's shapes works too: pick any OpenAI-shaped
 preset and change the address. That adapter is worth more than the rest put

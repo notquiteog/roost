@@ -31,6 +31,9 @@ Adapter = Literal[
     'openai', 'anthropic', 'ollama', 'a1111', 'comfyui', 'voyage', 'google',
     # One host that becomes up to five providers. See openmirror.providers.perch.
     'perch',
+    # OpenAI's shapes for four modalities and its own for images and video,
+    # with a model list per modality. See openmirror.providers.openrouter.
+    'openrouter',
     # Image and video, which is where the shapes stop being interchangeable.
     # Every one of these is a submit-poll-download job API that agrees with
     # the others about nothing except that structure — see
@@ -114,11 +117,12 @@ HOSTS: tuple[Host, ...] = (
     Host(
         id='openrouter',
         label='OpenRouter',
-        adapter='openai',
+        adapter='openrouter',
         base_url='https://openrouter.ai/api/v1',
         env_key='OPENROUTER_API_KEY',
-        modalities=CHAT_AND_EMBED,
-        note='A gateway to many vendors, so its model list is long and worth searching rather than scrolling.',
+        modalities=CHAT_AND_EMBED | STT | TTS | IMAGE | VIDEO,
+        note='A gateway to many vendors, and to all six kinds of request on one key — chat, embeddings, '
+             'dictation, speech, images and video. Its lists are long and worth searching rather than scrolling.',
     ),
     Host(
         id='fireworks',

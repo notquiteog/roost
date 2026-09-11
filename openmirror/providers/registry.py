@@ -206,7 +206,19 @@ class ProviderRegistry:
         """
         local_only = (user_routes.local_only if user_routes else False) or self._defaults.local_only
 
-        route = (user_routes.get(modality) if user_routes else None) or self._defaults.get(modality)
+        default = self._defaults.get(modality)
+        route = (user_routes.get(modality) if user_routes else None) or default
+
+        # Naming the provider the install already routes to is not asking for a
+        # different model on it. The studio sends its provider picker with every
+        # request, and a voice or agent client may name one too; without this,
+        # each was served that provider's first-listed model instead of the one
+        # configured — on a gateway, whatever it happened to list first.
+        if (
+            route is not None and default is not None and route is not default
+            and not route.model and route.provider == default.provider
+        ):
+            route = Route(provider=route.provider, model=default.model, options={**default.options, **route.options})
 
         if route is not None:
             entry = self._entries.get(route.provider)

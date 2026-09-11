@@ -26,9 +26,10 @@ log = logging.getLogger(__name__)
 def _default_routes(cfg: Config) -> RouteSet:
     """The install's own choice per modality.
 
-    Only chat and embedding are pinned from configuration, and they are pinned
-    separately. Everything else falls through to "first provider that can do
-    it", which prefers local hardware — see `ProviderRegistry.resolve`.
+    Chat and embedding are pinned separately, and each of the other four is
+    pinned only when it is named. Anything unnamed falls through to "first
+    provider that can do it", which prefers local hardware — see
+    `ProviderRegistry.resolve`.
 
     Naming a provider that is not registered is left to fail at resolution
     rather than dropped here, because the failure names the missing provider
@@ -43,6 +44,16 @@ def _default_routes(cfg: Config) -> RouteSet:
         routes.routes[Modality.EMBEDDING] = Route(
             provider=cfg.embed_provider, model=cfg.embed_model, options=options
         )
+    if cfg.stt_provider:
+        routes.routes[Modality.STT] = Route(provider=cfg.stt_provider, model=cfg.default_stt_model)
+    if cfg.tts_provider:
+        routes.routes[Modality.TTS] = Route(
+            provider=cfg.tts_provider, model=cfg.default_tts_model, options={'voice': cfg.default_tts_voice}
+        )
+    if cfg.image_provider:
+        routes.routes[Modality.IMAGE] = Route(provider=cfg.image_provider, model=cfg.image_model)
+    if cfg.video_provider:
+        routes.routes[Modality.VIDEO] = Route(provider=cfg.video_provider, model=cfg.video_model)
     return routes
 
 

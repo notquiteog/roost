@@ -334,6 +334,7 @@ async def test_every_media_provider_offers_a_form_without_being_asked_anything()
     from openmirror.providers.kling import KlingProvider
     from openmirror.providers.luma import LumaProvider
     from openmirror.providers.minimax import MiniMaxProvider
+    from openmirror.providers.openrouter import OpenRouterImages, OpenRouterVideo
     from openmirror.providers.runway import RunwayProvider
     from openmirror.providers.sora import SoraProvider
     from openmirror.providers.stability import StabilityProvider
@@ -342,6 +343,7 @@ async def test_every_media_provider_offers_a_form_without_being_asked_anything()
         BFLProvider(api_key='k'), IdeogramProvider(api_key='k'), KlingProvider(api_key='a:b'),
         LumaProvider(api_key='k'), MiniMaxProvider(api_key='k'), RunwayProvider(api_key='k'),
         SoraProvider(api_key='k'), StabilityProvider(api_key='k'),
+        OpenRouterImages(api_key='k'), OpenRouterVideo(api_key='k'),
     ]
     for provider in providers:
         params = await provider.describe('')
